@@ -1,0 +1,10 @@
+services:
+  ai-service:
+    build: .
+    # By using host networking, the Docker container shares your Arch machine's network stack perfectly.
+    # We don't need port forwarding, and the container can reach Ollama directly on localhost.
+    network_mode: "host"
+    environment:
+      - OLLAMA_HOST=http://127.0.0.1:11434
+      - OLLAMA_TEXT_MODEL=gemma4:12b
+      - OLLAMA_VISION_MODEL=gemma4:12b
