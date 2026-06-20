@@ -6,95 +6,167 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	pb "ai_service/proto"
 
+	"github.com/nats-io/nats.go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("Usage: go run main.go <path-to-document>")
+		log.Fatal("Usage: go run main.go <path-to-document-or-directory>")
 	}
-	filePath := os.Args[1]
+	inputPath := os.Args[1]
 
-	// 1. Read the file bytes
-	fileBytes, err := os.ReadFile(filePath)
+	// Determine if input is a single file or a directory
+	info, err := os.Stat(inputPath)
 	if err != nil {
-		log.Fatalf("Failed to read file: %v", err)
+		log.Fatalf("Failed to stat input path: %v", err)
 	}
-	fileName := filepath.Base(filePath)
 
-	// 2. Connect to our gRPC Server
-	// Note: We use insecure credentials here because we are running locally without TLS
+	var filesToProcess []string
+	if info.IsDir() {
+		entries, err := os.ReadDir(inputPath)
+		if err != nil {
+			log.Fatalf("Failed to read directory: %v", err)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				filesToProcess = append(filesToProcess, filepath.Join(inputPath, entry.Name()))
+			}
+		}
+	} else {
+		filesToProcess = append(filesToProcess, inputPath)
+	}
+
+	if len(filesToProcess) == 0 {
+		log.Fatal("No files found to process")
+	}
+
+	fmt.Printf("Found %d file(s) to process.\n", len(filesToProcess))
+
+	// Connect to our gRPC Server
 	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}
-	defer func(conn *grpc.ClientConn) {
-		err := conn.Close()
-		if err != nil {
-
-		}
-	}(conn)
-
+	defer conn.Close()
 	client := pb.NewDocumentProcessorClient(conn)
 
-	// 3. Create the request with the dynamic prompt instructions
-	req := &pb.ProcessDocumentRequest{
-		FileContent: fileBytes,
-		FileName:    fileName,
-		ModelChoice: pb.ModelChoice_MODEL_CHOICE_LOCAL,
-		// Example of the new features using a realistic schema!
-		DocumentType: "Attorney_Closing_Invoice",
-		TargetFields: []string{
-			"AttorneyName",
-			"OrderNumber",
-			"LoanNumber",
-			"AppointmentDateTime",
-			"BorrowerNames",
-			"BorrowerAddress",
-			"ClosingFee",
-			"BorrowerSigned",
-		},
-		CustomInstructions: "Please extract all data precisely as it appears on the document. If a value is missing or blank (like the tracking number or signature date), return null instead of making something up. Pay special attention to the Order# and Loan#.",
-		JsonSchema: `{
-			"type": "object",
-			"properties": {
-				"AttorneyName": {"type": "string"},
-				"OrderNumber": {"type": "string"},
-				"LoanNumber": {"type": "string"},
-				"AppointmentDateTime": {"type": "string"},
-				"BorrowerNames": {"type": "array", "items": {"type": "string"}},
-				"BorrowerAddress": {"type": "string"},
-				"ClosingFee": {"type": "number"},
-				"BorrowerSigned": {"type": "boolean"},
-				"Notes": {"type": "string"}
-			},
-			"required": ["AttorneyName", "OrderNumber", "LoanNumber", "AppointmentDateTime"]
-		}`,
-	}
-
-	fmt.Printf("Sending %s (%d bytes) to Go Processing Service...\n", fileName, len(fileBytes))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // LLMs can take a moment
-	defer cancel()
-
-	// 4. Send the request and wait for the AI response
-	startTime := time.Now()
-	res, err := client.ProcessDocument(ctx, req)
+	// Connect to NATS JetStream to listen for the async responses
+	nc, err := nats.Connect(nats.DefaultURL)
 	if err != nil {
-		log.Fatalf("gRPC call failed: %v", err)
+		log.Fatalf("failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	if err != nil {
+		log.Fatalf("failed to init JetStream: %v", err)
 	}
 
-	fmt.Printf("\n--- Response received in %v ---\n", time.Since(startTime))
-	fmt.Printf("Success: %v\n", res.GetSuccess())
-	if !res.GetSuccess() {
-		fmt.Printf("Error Message: %s\n", res.GetErrorMessage())
-		return
+	appID := "test_client_app"
+	subject := fmt.Sprintf("ai.processed.%s", appID)
+
+	// Setup a channel to block until we get all responses
+	done := make(chan []byte, len(filesToProcess))
+
+	// Subscribe to our app's specific JetStream subject
+	sub, err := js.Subscribe(subject, func(msg *nats.Msg) {
+		msg.Ack()
+		done <- msg.Data
+	})
+	if err != nil {
+		log.Fatalf("failed to subscribe to NATS subject %s: %v", subject, err)
+	}
+	defer sub.Unsubscribe()
+
+	startTime := time.Now()
+	var wg sync.WaitGroup
+
+	// Dispatch all requests concurrently
+	for _, filePath := range filesToProcess {
+		wg.Add(1)
+		go func(path string) {
+			defer wg.Done()
+
+			fileBytes, err := os.ReadFile(path)
+			if err != nil {
+				log.Printf("Failed to read file %s: %v", path, err)
+				return
+			}
+			fileName := filepath.Base(path)
+
+			req := &pb.ProcessDocumentRequest{
+				FileContent:  fileBytes,
+				FileName:     fileName,
+				ModelChoice:  pb.ModelChoice_MODEL_CHOICE_LOCAL,
+				AppId:        appID,
+				DocumentType: "Attorney_Closing_Invoice",
+				TargetFields: []string{
+					"AttorneyName", "OrderNumber", "LoanNumber",
+					"AppointmentDateTime", "BorrowerNames", "BorrowerAddress",
+					"ClosingFee", "BorrowerSigned",
+				},
+				CustomInstructions: "Extract precisely. Missing values return null.",
+				JsonSchema: `{
+					"type": "object",
+					"properties": {
+						"AttorneyName": {"type": "string"},
+						"OrderNumber": {"type": "string"},
+						"LoanNumber": {"type": "string"},
+						"AppointmentDateTime": {"type": "string"},
+						"BorrowerNames": {"type": "array", "items": {"type": "string"}},
+						"BorrowerAddress": {"type": "string"},
+						"ClosingFee": {"type": "number"},
+						"BorrowerSigned": {"type": "boolean"},
+						"Notes": {"type": "string"}
+					},
+					"required": ["AttorneyName", "OrderNumber", "LoanNumber", "AppointmentDateTime"]
+				}`,
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // Only need short timeout for async dispatch
+			defer cancel()
+
+			res, err := client.ProcessDocument(ctx, req)
+			if err != nil {
+				log.Printf("gRPC call failed for %s: %v", fileName, err)
+				return
+			}
+
+			if !res.GetSuccess() {
+				log.Printf("Dispatch Error for %s: %s", fileName, res.GetErrorMessage())
+				return
+			}
+
+			fmt.Printf("[Dispatched] %s -> Correlation ID: %s\n", fileName, res.GetCorrelationId())
+		}(filePath)
 	}
 
-	fmt.Printf("\n--- AI JSON Metadata ---\n%s\n", res.GetMetadataJson())
+	// Wait for all gRPC dispatches to finish
+	wg.Wait()
+	fmt.Printf("\nAll %d files successfully dispatched to the async queue in %v.\n", len(filesToProcess), time.Since(startTime))
+	fmt.Printf("Waiting for all async AI processing to finish via NATS...\n\n")
+
+	// Wait for the background NATS responses
+	receivedCount := 0
+	timeout := time.After(30 * time.Minute) // Large timeout for batch processing
+
+	for receivedCount < len(filesToProcess) {
+		select {
+		case payload := <-done:
+			receivedCount++
+			fmt.Printf("\n--- [%d/%d] Received Async NATS Response ---\n", receivedCount, len(filesToProcess))
+			fmt.Printf("%s\n", string(payload))
+		case <-timeout:
+			log.Fatalf("\nTimeout waiting for remaining NATS responses! (Received %d/%d)", receivedCount, len(filesToProcess))
+		}
+	}
+
+	fmt.Printf("\nSuccessfully processed all %d files in %v!\n", len(filesToProcess), time.Since(startTime))
 }

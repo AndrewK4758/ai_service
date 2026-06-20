@@ -13,5 +13,5 @@ type AnalyzeOptions struct {
 // Analyzer defines our robust dual-pipeline strategy
 type Analyzer interface {
 	AnalyzeText(ctx context.Context, text string, opts AnalyzeOptions) (string, error)
-	AnalyzeImage(ctx context.Context, imageBytes []byte, opts AnalyzeOptions) (string, error)
+	AnalyzeImage(ctx context.Context, imageBytes [][]byte, opts AnalyzeOptions) (string, error)
 }

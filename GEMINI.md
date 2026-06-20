@@ -4,6 +4,7 @@
 - make the best architectural decision for the task
 - Ask me if you are unsure of the direction to explore and proceed
 - Only make changes once 100% sure
+- Use zsh as the first shell, if not available fallback to bash
 
 ## Never 
 - make changes you are not sure is the best practice

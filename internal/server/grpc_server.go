@@ -2,81 +2,52 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"path/filepath"
-	"strings"
 
 	"ai_service/internal/ai"
-	"ai_service/internal/parser"
 	pb "ai_service/proto"
+	"github.com/google/uuid"
 )
 
 type DocumentProcessorServer struct {
 	pb.UnimplementedDocumentProcessorServer
 	analyzer ai.Analyzer
+	router   *AppRouter
 }
 
-func NewDocumentProcessorServer(analyzer ai.Analyzer) *DocumentProcessorServer {
+func NewDocumentProcessorServer(analyzer ai.Analyzer, router *AppRouter) *DocumentProcessorServer {
 	return &DocumentProcessorServer{
 		analyzer: analyzer,
+		router:   router,
 	}
 }
 
 func (s *DocumentProcessorServer) ProcessDocument(ctx context.Context, req *pb.ProcessDocumentRequest) (*pb.ProcessDocumentResponse, error) {
-	fileName := req.GetFileName()
-	ext := strings.ToLower(filepath.Ext(fileName))
-
-	log.Printf("Received document: %s, Extension: %s", fileName, ext)
-
-	// Build the dynamic prompt options from the gRPC request
-	opts := ai.AnalyzeOptions{
-		DocumentType:       req.GetDocumentType(),
-		TargetFields:       req.GetTargetFields(),
-		JsonSchema:         req.GetJsonSchema(),
-		CustomInstructions: req.GetCustomInstructions(),
+	// Generate correlation ID if not provided
+	corrID := req.GetCorrelationId()
+	if corrID == "" {
+		corrID = uuid.New().String()
 	}
 
-	var metadataJson string
-	var err error
-
-	// The Smart Router
-	switch ext {
-	case ".docx":
-		extractedText, parseErr := parser.ExtractDocxText(req.GetFileContent())
-		if parseErr != nil {
-			return s.formatErrorResponse("Failed to parse DOCX", parseErr), nil
-		}
-		metadataJson, err = s.analyzer.AnalyzeText(ctx, extractedText, opts)
-
-	case ".pdf":
-		extractedText, parseErr := parser.ExtractPdfText(req.GetFileContent())
-		if parseErr != nil {
-			return s.formatErrorResponse("Failed to parse PDF", parseErr), nil
-		}
-		metadataJson, err = s.analyzer.AnalyzeText(ctx, extractedText, opts)
-
-	case ".png", ".jpg", ".jpeg":
-		metadataJson, err = s.analyzer.AnalyzeImage(ctx, req.GetFileContent(), opts)
-
-	default:
-		return s.formatErrorResponse(fmt.Sprintf("Unsupported file extension: %s", ext), nil), nil
+	appID := req.GetAppId()
+	if appID == "" {
+		appID = "default"
 	}
 
-	if err != nil {
-		log.Printf("AI analysis failed: %v", err)
-		return s.formatErrorResponse("AI processing failed", err), nil
-	}
+	log.Printf("[CorrelationID: %s] Received document: %s for AppID: %s", corrID, req.GetFileName(), appID)
 
+	// Create job and dispatch it asynchronously
+	job := Job{
+		Ctx:           context.Background(), // use background so it survives gRPC cancellation
+		Req:           req,
+		CorrelationID: corrID,
+	}
+	s.router.Dispatch(job)
+
+	// Return immediately
 	return &pb.ProcessDocumentResponse{
-		Success:      true,
-		MetadataJson: metadataJson,
+		Success:       true,
+		CorrelationId: corrID,
+		Status:        "queued",
 	}, nil
-}
-
-func (s *DocumentProcessorServer) formatErrorResponse(msg string, err error) *pb.ProcessDocumentResponse {
-	return &pb.ProcessDocumentResponse{
-		Success:      false,
-		ErrorMessage: fmt.Sprintf("%s: %v", msg, err),
-	}
 }

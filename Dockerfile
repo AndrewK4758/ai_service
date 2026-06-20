@@ -17,8 +17,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /ai_service_bin ./cmd/server
 # Final Stage (Runtime)
 FROM alpine:latest
 
-# We only need basic certificates to make external HTTP calls securely if ever needed
-RUN apk --no-cache add ca-certificates
+# We only need basic certificates and poppler-utils for pdf-to-image conversion
+RUN apk --no-cache add ca-certificates poppler-utils
 
 WORKDIR /app
 

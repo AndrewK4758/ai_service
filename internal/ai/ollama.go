@@ -125,15 +125,19 @@ func (o *OllamaAnalyzer) AnalyzeText(ctx context.Context, text string, opts Anal
 	return o.callOllama(ctx, reqBody)
 }
 
-func (o *OllamaAnalyzer) AnalyzeImage(ctx context.Context, imageBytes []byte, opts AnalyzeOptions) (string, error) {
-	base64Image := base64.StdEncoding.EncodeToString(imageBytes)
-	prompt := buildPrompt(opts, "(See attached image)")
+func (o *OllamaAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, opts AnalyzeOptions) (string, error) {
+	var base64Images []string
+	for _, img := range imageBytes {
+		base64Images = append(base64Images, base64.StdEncoding.EncodeToString(img))
+	}
+
+	prompt := buildPrompt(opts, "(See attached image(s))")
 
 	reqBody := ollamaRequest{
 		Model:  o.VisionModel,
 		Prompt: prompt,
 		Stream: false,
-		Images: []string{base64Image},
+		Images: base64Images,
 	}
 
 	if opts.JsonSchema != "" {
