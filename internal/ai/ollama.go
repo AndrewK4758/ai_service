@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 )
 
 const BasePrompt = "You are an expert document metadata extractor. Your primary goal is to carefully analyze the provided document and output a JSON object containing a brief summary and any key entities found. Do not output anything except JSON."
@@ -28,11 +30,12 @@ func NewOllamaAnalyzer(baseURL, textModel, visionModel string) *OllamaAnalyzer {
 }
 
 type ollamaRequest struct {
-	Model  string      `json:"model"`
-	Prompt string      `json:"prompt"`
-	Stream bool        `json:"stream"`
-	Images []string    `json:"images,omitempty"`
-	Format interface{} `json:"format,omitempty"` // Forces JSON output, can accept a raw JSON schema object
+	Model   string                 `json:"model"`
+	Prompt  string                 `json:"prompt"`
+	Stream  bool                   `json:"stream"`
+	Images  []string               `json:"images,omitempty"`
+	Format  interface{}            `json:"format,omitempty"` // Forces JSON output, can accept a raw JSON schema object
+	Options map[string]interface{} `json:"options,omitempty"`
 }
 
 type ollamaResponse struct {
@@ -77,6 +80,9 @@ func (o *OllamaAnalyzer) callOllama(ctx context.Context, reqBody ollamaRequest) 
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
+
+	log.Printf("[Ollama] Sending request to %s with model %s", url, reqBody.Model)
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to call ollama: %w", err)
@@ -88,17 +94,29 @@ func (o *OllamaAnalyzer) callOllama(ctx context.Context, reqBody ollamaRequest) 
 		}
 	}(resp.Body)
 
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read ollama response body: %w", err)
+	}
+
+	log.Printf("[Ollama] Received response status %d. Body: %s", resp.StatusCode, string(bodyBytes))
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var ollamaResp ollamaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+	if err := json.Unmarshal(bodyBytes, &ollamaResp); err != nil {
 		return "", fmt.Errorf("failed to decode ollama response: %w", err)
 	}
 
-	return ollamaResp.Response, nil
+	response := strings.TrimSpace(ollamaResp.Response)
+	response = strings.TrimPrefix(response, "```json")
+	response = strings.TrimPrefix(response, "```")
+	response = strings.TrimSuffix(response, "```")
+	response = strings.TrimSpace(response)
+
+	return response, nil
 }
 
 func (o *OllamaAnalyzer) AnalyzeText(ctx context.Context, text string, opts AnalyzeOptions) (string, error) {
@@ -108,19 +126,14 @@ func (o *OllamaAnalyzer) AnalyzeText(ctx context.Context, text string, opts Anal
 		Model:  o.TextModel,
 		Prompt: prompt,
 		Stream: false,
+		Options: map[string]interface{}{
+			"num_ctx": 32768,
+		},
 	}
 
-	// If a schema is provided, try to pass it directly to Ollama's Structured Outputs engine
-	if opts.JsonSchema != "" {
-		var schemaMap map[string]interface{}
-		if err := json.Unmarshal([]byte(opts.JsonSchema), &schemaMap); err == nil {
-			reqBody.Format = schemaMap
-		} else {
-			reqBody.Format = "json" // Fallback
-		}
-	} else {
-		reqBody.Format = "json"
-	}
+	// We omit passing opts.JsonSchema to reqBody.Format because smaller models like
+	// gemma4:e2b struggle with strict schema enforcement and will return a blank {} object.
+	// The BasePrompt already instructs the model to return JSON.
 
 	return o.callOllama(ctx, reqBody)
 }
@@ -138,18 +151,14 @@ func (o *OllamaAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 		Prompt: prompt,
 		Stream: false,
 		Images: base64Images,
+		Options: map[string]interface{}{
+			"num_ctx": 32768,
+		},
 	}
 
-	if opts.JsonSchema != "" {
-		var schemaMap map[string]interface{}
-		if err := json.Unmarshal([]byte(opts.JsonSchema), &schemaMap); err == nil {
-			reqBody.Format = schemaMap
-		} else {
-			reqBody.Format = "json"
-		}
-	} else {
-		reqBody.Format = "json"
-	}
+	// We omit passing opts.JsonSchema to reqBody.Format because some models
+	// struggle with strict schema enforcement and will return a blank {} object.
+	// The BasePrompt already instructs the model to return JSON.
 
 	return o.callOllama(ctx, reqBody)
 }

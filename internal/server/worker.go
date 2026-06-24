@@ -67,10 +67,19 @@ func (r *AppRouter) processDocumentSync(job Job) (string, error) {
 	}
 
 	switch ext {
-	case ".docx":
-		extractedText, err := parser.ExtractDocxText(req.GetFileContent())
-		if err != nil {
-			return "", fmt.Errorf("failed to parse DOCX: %w", err)
+	case ".docx", ".txt":
+		var extractedText string
+		var err error
+		if ext == ".docx" {
+			extractedText, err = parser.ExtractDocxText(req.GetFileContent())
+			if err != nil {
+				return "", fmt.Errorf("failed to parse DOCX: %w", err)
+			}
+		} else {
+			extractedText = string(req.GetFileContent())
+		}
+		if len(extractedText) > 60000 {
+			extractedText = extractedText[:60000] + "\n...[TRUNCATED due to length]..."
 		}
 		return r.analyzer.AnalyzeText(ctx, extractedText, opts)
 
@@ -86,6 +95,10 @@ func (r *AppRouter) processDocumentSync(job Job) (string, error) {
 				return "", fmt.Errorf("failed to convert PDF to images: %w", errConv)
 			}
 			return r.analyzer.AnalyzeImage(ctx, images, opts)
+		}
+
+		if len(extractedText) > 60000 {
+			extractedText = extractedText[:60000] + "\n...[TRUNCATED due to length]..."
 		}
 		return r.analyzer.AnalyzeText(ctx, extractedText, opts)
 

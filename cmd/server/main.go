@@ -11,12 +11,15 @@ import (
 	"ai_service/internal/server"
 	pb "ai_service/proto"
 
+	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 func main() {
+	// Attempt to load .env file (ignore if it doesn't exist)
+	_ = godotenv.Load()
 	portStr := os.Getenv("SERVER_PORT")
 	if portStr == "" {
 		portStr = "50051"

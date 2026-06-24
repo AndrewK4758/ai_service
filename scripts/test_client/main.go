@@ -54,7 +54,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}
-	defer conn.Close()
+	defer func(conn *grpc.ClientConn) {
+		err := conn.Close()
+		if err != nil {
+			fmt.Println("Failed to close connection: ", err)
+		}
+	}(conn)
 	client := pb.NewDocumentProcessorClient(conn)
 
 	// Connect to NATS JetStream to listen for the async responses
@@ -77,13 +82,21 @@ func main() {
 
 	// Subscribe to our app's specific JetStream subject
 	sub, err := js.Subscribe(subject, func(msg *nats.Msg) {
-		msg.Ack()
+		err := msg.Ack()
+		if err != nil {
+			fmt.Println("Failed to ack message: ", err)
+		}
 		done <- msg.Data
-	})
+	}, nats.DeliverNew())
 	if err != nil {
 		log.Fatalf("failed to subscribe to NATS subject %s: %v", subject, err)
 	}
-	defer sub.Unsubscribe()
+	defer func(sub *nats.Subscription) {
+		err := sub.Unsubscribe()
+		if err != nil {
+			fmt.Println("Failed to unsubscribe: ", err)
+		}
+	}(sub)
 
 	startTime := time.Now()
 	var wg sync.WaitGroup
