@@ -9,10 +9,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 )
 
-const BasePrompt = "You are an expert document metadata extractor. Your primary goal is to carefully analyze the provided document and output a JSON object containing a brief summary and any key entities found. Do not output anything except JSON."
+var defaultBasePrompt = "You are an expert document metadata extractor. Your primary goal is to carefully analyze the provided document and output a JSON object containing a brief summary and any key entities found. Do not output anything except JSON."
 
 // OllamaAnalyzer implements the Analyzer interface.
 type OllamaAnalyzer struct {
@@ -44,7 +46,11 @@ type ollamaResponse struct {
 
 // buildPrompt constructs the final prompt by combining the BasePrompt with any optional parameters
 func buildPrompt(opts AnalyzeOptions, documentContent string) string {
-	prompt := BasePrompt + "\n"
+	basePrompt := os.Getenv("OLLAMA_BASE_PROMPT")
+	if basePrompt == "" {
+		basePrompt = defaultBasePrompt
+	}
+	prompt := basePrompt + "\n"
 
 	if opts.DocumentType != "" {
 		prompt += fmt.Sprintf("\nThe document is of type: %s\n", opts.DocumentType)
@@ -122,12 +128,19 @@ func (o *OllamaAnalyzer) callOllama(ctx context.Context, reqBody ollamaRequest) 
 func (o *OllamaAnalyzer) AnalyzeText(ctx context.Context, text string, opts AnalyzeOptions) (string, error) {
 	prompt := buildPrompt(opts, text)
 
+	numCtx := 32768
+	if envCtx := os.Getenv("OLLAMA_NUM_CTX"); envCtx != "" {
+		if c, err := strconv.Atoi(envCtx); err == nil && c > 0 {
+			numCtx = c
+		}
+	}
+
 	reqBody := ollamaRequest{
 		Model:  o.TextModel,
 		Prompt: prompt,
 		Stream: false,
 		Options: map[string]interface{}{
-			"num_ctx": 32768,
+			"num_ctx": numCtx,
 		},
 	}
 
@@ -146,13 +159,20 @@ func (o *OllamaAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 
 	prompt := buildPrompt(opts, "(See attached image(s))")
 
+	numCtx := 32768
+	if envCtx := os.Getenv("OLLAMA_NUM_CTX"); envCtx != "" {
+		if c, err := strconv.Atoi(envCtx); err == nil && c > 0 {
+			numCtx = c
+		}
+	}
+
 	reqBody := ollamaRequest{
 		Model:  o.VisionModel,
 		Prompt: prompt,
 		Stream: false,
 		Images: base64Images,
 		Options: map[string]interface{}{
-			"num_ctx": 32768,
+			"num_ctx": numCtx,
 		},
 	}
 

@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"ai_service/internal/ai"
+	"ai_service/internal/parser"
 	pb "doc_processor/shared_protos"
+
 	"github.com/google/uuid"
 )
 
@@ -54,18 +57,38 @@ func (s *DocumentProcessorServer) ProcessDocument(ctx context.Context, req *pb.P
 
 func (s *DocumentProcessorServer) ExtractDocumentData(ctx context.Context, req *pb.ExtractRequest) (*pb.ExtractResponse, error) {
 	log.Printf("Received synchronous ExtractDocumentData request")
-	
+
 	opts := ai.AnalyzeOptions{
 		CustomInstructions: req.GetPrompt(),
 		JsonSchema:         req.GetJsonSchema(),
 	}
 
-	result, err := s.analyzer.AnalyzeImage(ctx, req.GetPageImages(), opts)
+	text, err := parser.ExtractPdfText(req.GetChunkPdf())
 	if err != nil {
-		log.Printf("ERROR: [ExtractDocumentData] Failed to analyze image: %v", err)
+		wrappedErr := fmt.Errorf("failed to extract text from PDF chunk: %w", err)
+		log.Printf("ERROR: [ExtractDocumentData] %v", wrappedErr)
 		return &pb.ExtractResponse{
 			Success:      false,
-			ErrorMessage: err.Error(),
+			ErrorMessage: wrappedErr.Error(),
+		}, nil
+	}
+
+	if text == "" {
+		wrappedErr := fmt.Errorf("extracted text is empty, cannot proceed with analysis")
+		log.Printf("ERROR: [ExtractDocumentData] %v", wrappedErr)
+		return &pb.ExtractResponse{
+			Success:      false,
+			ErrorMessage: wrappedErr.Error(),
+		}, nil
+	}
+
+	result, err := s.analyzer.AnalyzeText(ctx, text, opts)
+	if err != nil {
+		wrappedErr := fmt.Errorf("failed to analyze text: %w", err)
+		log.Printf("ERROR: [ExtractDocumentData] %v", wrappedErr)
+		return &pb.ExtractResponse{
+			Success:      false,
+			ErrorMessage: wrappedErr.Error(),
 		}, nil
 	}
 

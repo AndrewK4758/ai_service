@@ -5,30 +5,31 @@ import (
 	"bytes"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
-
-	"github.com/ledongthuc/pdf"
+	"os/exec"
 )
 
-// ExtractPdfText uses a pure Go library to read raw text from a PDF
+// ExtractPdfText uses poppler-utils (pdftotext) for extremely robust extraction
 func ExtractPdfText(fileBytes []byte) (string, error) {
-	reader := bytes.NewReader(fileBytes)
-	r, err := pdf.NewReader(reader, int64(len(fileBytes)))
+	if len(fileBytes) == 0 {
+		return "", fmt.Errorf("cannot extract text from empty byte slice")
+	}
+
+	cmd := exec.Command("pdftotext", "-", "-")
+	cmd.Stdin = bytes.NewReader(fileBytes)
+
+	var outBuf bytes.Buffer
+	var errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	err := cmd.Run()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("pdftotext failed: %w, stderr: %s", err, errBuf.String())
 	}
 
-	b, err := r.GetPlainText()
-	if err != nil {
-		return "", err
-	}
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(b); err != nil {
-		return "", err
-	}
-
-	return buf.String(), nil
+	return outBuf.String(), nil
 }
 
 // docxDocument represents the internal word/document.xml structure
