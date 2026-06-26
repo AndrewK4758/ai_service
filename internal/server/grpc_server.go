@@ -51,3 +51,26 @@ func (s *DocumentProcessorServer) ProcessDocument(ctx context.Context, req *pb.P
 		Status:        "queued",
 	}, nil
 }
+
+func (s *DocumentProcessorServer) ExtractDocumentData(ctx context.Context, req *pb.ExtractRequest) (*pb.ExtractResponse, error) {
+	log.Printf("Received synchronous ExtractDocumentData request")
+	
+	opts := ai.AnalyzeOptions{
+		CustomInstructions: req.GetPrompt(),
+		JsonSchema:         req.GetJsonSchema(),
+	}
+
+	result, err := s.analyzer.AnalyzeImage(ctx, req.GetPageImages(), opts)
+	if err != nil {
+		log.Printf("ERROR: [ExtractDocumentData] Failed to analyze image: %v", err)
+		return &pb.ExtractResponse{
+			Success:      false,
+			ErrorMessage: err.Error(),
+		}, nil
+	}
+
+	return &pb.ExtractResponse{
+		Success:       true,
+		ExtractedJson: result,
+	}, nil
+}
