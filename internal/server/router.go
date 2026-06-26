@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"ai_service/internal/ai"
-	pb "ai_service/proto"
+	pb "doc_processor/shared_protos"
 	"github.com/nats-io/nats.go"
 )
 

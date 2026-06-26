@@ -9,7 +9,7 @@ import (
 
 	"ai_service/internal/ai"
 	"ai_service/internal/server"
-	pb "ai_service/proto"
+	pb "doc_processor/shared_protos"
 
 	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"

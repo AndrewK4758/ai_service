@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	pb "ai_service/proto"
+	pb "doc_processor/shared_protos"
 
 	"github.com/nats-io/nats.go"
 	"google.golang.org/grpc"

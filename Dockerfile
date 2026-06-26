@@ -3,15 +3,17 @@ FROM golang:alpine AS builder
 
 WORKDIR /app
 
-# Cache dependencies
-COPY go.mod go.sum* ./
+# In order to support the local `replace shared_protos` go.mod directive,
+# we set the Docker build context to the root doc_processor_service directory
+COPY shared_protos/ ./shared_protos/
+COPY ai_service/ ./ai_service/
+
+WORKDIR /app/ai_service
+
+# Download dependencies
 RUN go mod download
 
-# Copy source code
-COPY . .
-
-# Build the Go application.
-# CGO_ENABLED=0 builds a perfectly statically linked binary with zero C/C++ dependencies.
+# Build the Go application
 RUN CGO_ENABLED=0 GOOS=linux go build -o /ai_service_bin ./cmd/server
 
 # Final Stage (Runtime)
