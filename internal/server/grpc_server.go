@@ -63,14 +63,21 @@ func (s *DocumentProcessorServer) ExtractDocumentData(ctx context.Context, req *
 		JsonSchema:         req.GetJsonSchema(),
 	}
 
-	text, err := parser.ExtractPdfText(req.GetChunkPdf())
-	if err != nil {
-		wrappedErr := fmt.Errorf("failed to extract text from PDF chunk: %w", err)
-		log.Printf("ERROR: [ExtractDocumentData] %v", wrappedErr)
-		return &pb.ExtractResponse{
-			Success:      false,
-			ErrorMessage: wrappedErr.Error(),
-		}, nil
+	var text string
+	var err error
+
+	if req.GetChunkText() != "" {
+		text = req.GetChunkText()
+	} else {
+		text, err = parser.ExtractPdfText(req.GetChunkPdf())
+		if err != nil {
+			wrappedErr := fmt.Errorf("failed to extract text from PDF chunk: %w", err)
+			log.Printf("ERROR: [ExtractDocumentData] %v", wrappedErr)
+			return &pb.ExtractResponse{
+				Success:      false,
+				ErrorMessage: wrappedErr.Error(),
+			}, nil
+		}
 	}
 
 	if text == "" {
