@@ -25,7 +25,7 @@ func NewDocumentProcessorServer(analyzer ai.Analyzer, router *AppRouter) *Docume
 	}
 }
 
-func (s *DocumentProcessorServer) ProcessDocument(ctx context.Context, req *pb.ProcessDocumentRequest) (*pb.ProcessDocumentResponse, error) {
+func (s *DocumentProcessorServer) ProcessDocument(_ context.Context, req *pb.ProcessDocumentRequest) (*pb.ProcessDocumentResponse, error) {
 	// Generate correlation ID if not provided
 	corrID := req.GetCorrelationId()
 	if corrID == "" {
