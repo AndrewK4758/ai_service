@@ -25,3 +25,6 @@ go.work.sum
 # env file
 # !.env committed as this is a private repo
 
+
+*_bin
+*_bin.exe
