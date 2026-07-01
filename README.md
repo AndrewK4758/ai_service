@@ -56,8 +56,7 @@ Restart the service: `sudo systemctl restart ollama`.
 
 ## 🚀 2. Configuration & Launch
 
-This service is fully containerized using Docker. 
-
+### Docker (All Platforms - Recommended)
 1. Ensure the `.env` file exists in the root of the project:
    ```env
    OLLAMA_HOST=http://127.0.0.1:11434
@@ -69,10 +68,29 @@ This service is fully containerized using Docker.
    APP_QUEUE_SIZE=100
    WORKER_POOL_SIZE=5
    ```
-
-2. Build and start the Docker container (which includes NATS JetStream and the Go Service):
+2. Build and start the Docker container from the project root:
    ```bash
    docker-compose up -d --build
+   ```
+
+### Local Development (Linux / macOS)
+1. Ensure Ollama and NATS are running locally.
+2. Set environment variables and run:
+   ```bash
+   export OLLAMA_HOST=http://127.0.0.1:11434
+   export NATS_URL=nats://127.0.0.1:4222
+   export SERVER_PORT=50051
+   go run cmd/server/main.go
+   ```
+
+### Local Development (Windows PowerShell)
+1. Ensure Ollama and NATS are running locally.
+2. Set environment variables and run:
+   ```powershell
+   $env:OLLAMA_HOST="http://127.0.0.1:11434"
+   $env:NATS_URL="nats://127.0.0.1:4222"
+   $env:SERVER_PORT="50051"
+   go run cmd\server\main.go
    ```
 
 ---
