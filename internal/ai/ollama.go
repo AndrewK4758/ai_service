@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-var defaultBasePrompt = "You are an expert document metadata extractor. Your primary goal is to carefully analyze the provided document and output a JSON object containing a brief summary and any key entities found. Do not output anything except JSON."
+var defaultBasePrompt = "You are a strict AI assistant executing tasks for a business application. Your only goal is to handle the provided tasks exactly as described with 0 creativity. Do not hallucinate, explain, or add any unrequested information."
 
 // OllamaAnalyzer implements the Analyzer interface.
 type OllamaAnalyzer struct {
