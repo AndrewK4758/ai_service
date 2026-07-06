@@ -1,39 +1,29 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"log"
-	"net"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 
 	"ai_service/internal/ai"
 	"ai_service/internal/server"
-	pb "doc_processor/shared_protos"
 
 	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 )
 
 func main() {
 	// Attempt to load .env file (ignore if it doesn't exist)
 	_ = godotenv.Load()
-	portStr := os.Getenv("SERVER_PORT")
-	if portStr == "" {
-		portStr = "50051"
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		log.Fatalf("invalid SERVER_PORT: %v", err)
-	}
 
 	queueSizeStr := os.Getenv("APP_QUEUE_SIZE")
 	if queueSizeStr == "" {
 		queueSizeStr = "100"
 	}
-	queueSize, err := strconv.Atoi(queueSizeStr)
+	_, err := strconv.Atoi(queueSizeStr)
 	if err != nil {
 		log.Fatalf("invalid APP_QUEUE_SIZE: %v", err)
 	}
@@ -45,11 +35,6 @@ func main() {
 	workerPoolSize, err := strconv.Atoi(workerPoolSizeStr)
 	if err != nil {
 		log.Fatalf("invalid WORKER_POOL_SIZE: %v", err)
-	}
-
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
 	}
 
 	ollamaHost := os.Getenv("OLLAMA_HOST")
@@ -84,44 +69,32 @@ func main() {
 	if nc != nil {
 		js, err = nc.JetStream()
 		if err != nil {
-			log.Printf("Warning: failed to initialize JetStream: %v", err)
-		} else {
-			// Ensure the stream exists for our subjects
-			streamName := "AI_RESPONSES"
-			_, err = js.StreamInfo(streamName)
-			if err != nil {
-				// Stream doesn't exist, create it
-				_, err = js.AddStream(&nats.StreamConfig{
-					Name:     streamName,
-					Subjects: []string{"ai.processed.*"},
-				})
-				if err != nil {
-					log.Printf("Warning: failed to create JetStream stream: %v", err)
-				} else {
-					log.Printf("Successfully created JetStream stream: %s", streamName)
-				}
-			}
+			log.Fatalf("Warning: failed to initialize JetStream: %v", err)
 		}
+	} else {
+		log.Fatalf("NATS connection is required for ai_service")
 	}
 
 	// Initialize the AI Analyzer with both models
 	ollamaAnalyzer := ai.NewOllamaAnalyzer(ollamaHost, ollamaTextModel, ollamaVisionModel)
 
-	// Create the AppRouter for isolated async queues
-	router := server.NewAppRouter(ollamaAnalyzer, js, queueSize, workerPoolSize)
+	natsServer := server.NewNatsServer(nc, js, ollamaAnalyzer, workerPoolSize)
 
-	// Inject dependency into server
-	grpcServerImpl := server.NewDocumentProcessorServer(ollamaAnalyzer, router)
-
-	// Start gRPC server
-	s := grpc.NewServer()
-	pb.RegisterDocumentProcessorServer(s, grpcServerImpl)
-	reflection.Register(s)
-
-	log.Printf("Go AI Processing Service listening at %v", lis.Addr())
 	log.Printf("Ollama Host: %s | Text Model: %s | Vision Model: %s", ollamaHost, ollamaTextModel, ollamaVisionModel)
 
-	if err := s.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle graceful shutdown
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		log.Println("Shutting down AI service...")
+		cancel()
+	}()
+
+	if err := natsServer.Start(ctx); err != nil {
+		log.Fatalf("NATS server failed: %v", err)
 	}
 }
