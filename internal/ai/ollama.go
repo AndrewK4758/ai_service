@@ -12,6 +12,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	pb "github.com/AndrewK4758/shared_protos"
 )
 
 var defaultBasePrompt = "You are a strict AI assistant executing tasks for a business application. Your only goal is to handle the provided tasks exactly as described with 0 creativity. Do not hallucinate, explain, or add any unrequested information."
@@ -44,31 +46,48 @@ type ollamaResponse struct {
 	Response string `json:"response"`
 }
 
-// buildPrompt constructs the final prompt by combining the BasePrompt with any optional parameters
-func buildPrompt(opts AnalyzeOptions, documentContent string) string {
+func buildPrompt(workflowCtx *pb.WorkflowContext, action *pb.ActionDefinition, documentContent string) string {
 	basePrompt := os.Getenv("OLLAMA_BASE_PROMPT")
 	if basePrompt == "" {
 		basePrompt = defaultBasePrompt
 	}
 	prompt := basePrompt + "\n"
 
-	if opts.DocumentType != "" {
-		prompt += fmt.Sprintf("\nThe document is of type: %s\n", opts.DocumentType)
+	isOrchPrimitive := false
+	if action != nil {
+		p := action.OrchestratorPrimitive
+		if p == "PLANNING_PRIMITIVE" || p == "REVIEW_PRIMITIVE" || p == "VALIDATION_PRIMITIVE" || p == "ASSEMBLY_PRIMITIVE" {
+			isOrchPrimitive = true
+		}
 	}
 
-	if len(opts.TargetFields) > 0 {
-		prompt += fmt.Sprintf("\nYou MUST extract the following specific fields: %v\n", opts.TargetFields)
+	if workflowCtx != nil && !isOrchPrimitive {
+		if workflowCtx.JobDefinition != nil && workflowCtx.JobDefinition.GlobalInstructions != "" {
+			prompt += fmt.Sprintf("\nGlobal Job Instructions:\n%s\n", workflowCtx.JobDefinition.GlobalInstructions)
+		}
+
+		if workflowCtx.CurrentStep != nil {
+			if workflowCtx.CurrentStep.CustomInstructions != "" {
+				prompt += fmt.Sprintf("\nStep Specific Instructions:\n%s\n", workflowCtx.CurrentStep.CustomInstructions)
+			}
+			if workflowCtx.CurrentStep.ExpectedSchema != "" {
+				prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", workflowCtx.CurrentStep.ExpectedSchema)
+			}
+		}
+
+		if workflowCtx.GlobalState != nil {
+			stateBytes, err := workflowCtx.GlobalState.MarshalJSON()
+			if err == nil {
+				prompt += fmt.Sprintf("\nCurrent Global State:\n%s\n", string(stateBytes))
+			}
+		}
 	}
 
-	if opts.CustomInstructions != "" {
-		prompt += fmt.Sprintf("\nAdditional Instructions:\n%s\n", opts.CustomInstructions)
+	if action != nil && !isOrchPrimitive {
+		prompt += fmt.Sprintf("\nYour exact Task to execute right now:\n%s\n", action.Name)
 	}
 
-	if opts.JsonSchema != "" {
-		prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", opts.JsonSchema)
-	}
-
-	prompt += "\nDocument Content:\n" + documentContent
+	prompt += "\nDocument Content / Input:\n" + documentContent
 	return prompt
 }
 
@@ -125,8 +144,8 @@ func (o *OllamaAnalyzer) callOllama(ctx context.Context, reqBody ollamaRequest) 
 	return response, nil
 }
 
-func (o *OllamaAnalyzer) AnalyzeText(ctx context.Context, text string, opts AnalyzeOptions) (string, error) {
-	prompt := buildPrompt(opts, text)
+func (o *OllamaAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.WorkflowContext, action *pb.ActionDefinition) (string, error) {
+	prompt := buildPrompt(workflowCtx, action, text)
 
 	numCtx := 32768
 	if envCtx := os.Getenv("OLLAMA_NUM_CTX"); envCtx != "" {
@@ -151,13 +170,13 @@ func (o *OllamaAnalyzer) AnalyzeText(ctx context.Context, text string, opts Anal
 	return o.callOllama(ctx, reqBody)
 }
 
-func (o *OllamaAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, opts AnalyzeOptions) (string, error) {
+func (o *OllamaAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.WorkflowContext, action *pb.ActionDefinition) (string, error) {
 	var base64Images []string
 	for _, img := range imageBytes {
 		base64Images = append(base64Images, base64.StdEncoding.EncodeToString(img))
 	}
 
-	prompt := buildPrompt(opts, "(See attached image(s))")
+	prompt := buildPrompt(workflowCtx, action, "(See attached image(s))")
 
 	numCtx := 32768
 	if envCtx := os.Getenv("OLLAMA_NUM_CTX"); envCtx != "" {

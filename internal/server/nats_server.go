@@ -12,7 +12,7 @@ import (
 
 	"ai_service/internal/ai"
 	"ai_service/internal/parser"
-	pb "doc_processor/shared_protos"
+	pb "github.com/AndrewK4758/shared_protos"
 )
 
 type NatsServer struct {
@@ -111,11 +111,6 @@ func (s *NatsServer) processMessage(ctx context.Context, workerID int, msg *nats
 		return
 	}
 
-	opts := ai.AnalyzeOptions{
-		CustomInstructions: req.GetPrompt(),
-		JsonSchema:         req.GetJsonSchema(),
-	}
-
 	var text string
 	var err error
 
@@ -133,7 +128,7 @@ func (s *NatsServer) processMessage(ctx context.Context, workerID int, msg *nats
 		text = " "
 	}
 
-	result, err := s.analyzer.AnalyzeText(ctx, text, opts)
+	result, err := s.analyzer.AnalyzeText(ctx, text, req.GetContext(), req.GetCurrentAction())
 	if err != nil {
 		log.Printf("[Worker %d] AI analysis failed: %v", workerID, err)
 		s.sendErrorReply(msg.Reply, fmt.Sprintf("failed to perform action on text: %v", err))
@@ -152,10 +147,10 @@ func (s *NatsServer) processMessage(ctx context.Context, workerID int, msg *nats
 		return
 	}
 
-	// Publish response to the dynamically requested Reply subject (Core NATS)
+	// Publish response to the dynamically requested Reply subject (JetStream)
 	if msg.Reply != "" {
-		if err := s.nc.Publish(msg.Reply, respBytes); err != nil {
-			log.Printf("[Worker %d] Failed to publish reply to %s: %v", workerID, msg.Reply, err)
+		if _, err := s.js.Publish(msg.Reply, respBytes); err != nil {
+			log.Printf("[Worker %d] Failed to publish reply to JetStream %s: %v", workerID, msg.Reply, err)
 		}
 	}
 	log.Printf("[Worker %d] Successfully completed action and replied to %s", workerID, msg.Reply)
@@ -170,5 +165,5 @@ func (s *NatsServer) sendErrorReply(replySubject, errMsg string) {
 		ErrorMessage: errMsg,
 	}
 	respBytes, _ := proto.Marshal(resp)
-	_ = s.nc.Publish(replySubject, respBytes)
+	_, _ = s.js.Publish(replySubject, respBytes)
 }

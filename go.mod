@@ -3,11 +3,11 @@ module ai_service
 go 1.26.4
 
 require (
-	doc_processor/shared_protos v0.0.0-00010101000000-000000000000
-	github.com/google/uuid v1.6.0
+	github.com/AndrewK4758/shared_protos v0.0.0-20260708213456-d15044436a15
 	github.com/joho/godotenv v1.5.1
 	github.com/nats-io/nats.go v1.52.0
 	google.golang.org/grpc v1.81.1
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -19,7 +19,4 @@ require (
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260622175928-b703f567277d // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace doc_processor/shared_protos => ../shared_protos

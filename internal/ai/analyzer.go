@@ -1,17 +1,12 @@
 package ai
 
-import "context"
-
-// AnalyzeOptions holds the optional dynamic prompt parameters sent from the frontend
-type AnalyzeOptions struct {
-	DocumentType       string
-	TargetFields       []string
-	JsonSchema         string
-	CustomInstructions string
-}
+import (
+	"context"
+	pb "github.com/AndrewK4758/shared_protos"
+)
 
 // Analyzer defines our robust dual-pipeline strategy
 type Analyzer interface {
-	AnalyzeText(ctx context.Context, text string, opts AnalyzeOptions) (string, error)
-	AnalyzeImage(ctx context.Context, imageBytes [][]byte, opts AnalyzeOptions) (string, error)
+	AnalyzeText(ctx context.Context, text string, workflowCtx *pb.WorkflowContext, action *pb.ActionDefinition) (string, error)
+	AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.WorkflowContext, action *pb.ActionDefinition) (string, error)
 }

@@ -7,24 +7,26 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	pb "github.com/AndrewK4758/shared_protos"
 )
 
 func TestBuildPrompt(t *testing.T) {
-	opts := AnalyzeOptions{
-		DocumentType:       "INVOICE",
-		TargetFields:       []string{"TotalAmount", "Date"},
-		CustomInstructions: "Ignore everything else",
-		JsonSchema:         `{"type": "object"}`,
+	workflowCtx := &pb.WorkflowContext{
+		CurrentStep: &pb.StepDefinition{
+			CustomInstructions: "Ignore everything else",
+			ExpectedSchema:     `{"type": "object"}`,
+		},
+	}
+	action := &pb.ActionDefinition{
+		Name: "Extract Invoice",
 	}
 	content := "Invoice 123"
 
-	prompt := buildPrompt(opts, content)
+	prompt := buildPrompt(workflowCtx, action, content)
 
-	if !strings.Contains(prompt, "INVOICE") {
-		t.Error("Prompt missing DocumentType")
-	}
-	if !strings.Contains(prompt, "TotalAmount") {
-		t.Error("Prompt missing TargetFields")
+	if !strings.Contains(prompt, "Extract Invoice") {
+		t.Error("Prompt missing Action Name")
 	}
 	if !strings.Contains(prompt, "Ignore everything else") {
 		t.Error("Prompt missing CustomInstructions")
@@ -42,7 +44,7 @@ func TestOllamaAnalyzer_AnalyzeText(t *testing.T) {
 		if r.URL.Path != "/api/generate" {
 			t.Errorf("Expected /api/generate, got %s", r.URL.Path)
 		}
-		
+
 		var req ollamaRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatal(err)
@@ -58,9 +60,10 @@ func TestOllamaAnalyzer_AnalyzeText(t *testing.T) {
 	defer server.Close()
 
 	analyzer := NewOllamaAnalyzer(server.URL, "test-model", "vision-model")
-	opts := AnalyzeOptions{}
-	
-	result, err := analyzer.AnalyzeText(context.Background(), "hello", opts)
+	workflowCtx := &pb.WorkflowContext{}
+	action := &pb.ActionDefinition{}
+
+	result, err := analyzer.AnalyzeText(context.Background(), "hello", workflowCtx, action)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -74,7 +77,7 @@ func TestOllamaAnalyzer_AnalyzeImage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ollamaRequest
 		json.NewDecoder(r.Body).Decode(&req)
-		
+
 		if len(req.Images) != 1 {
 			t.Errorf("Expected 1 image, got %d", len(req.Images))
 		}
@@ -88,9 +91,10 @@ func TestOllamaAnalyzer_AnalyzeImage(t *testing.T) {
 	defer server.Close()
 
 	analyzer := NewOllamaAnalyzer(server.URL, "test-model", "vision-model")
-	opts := AnalyzeOptions{}
-	
-	result, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fake-image")}, opts)
+	workflowCtx := &pb.WorkflowContext{}
+	action := &pb.ActionDefinition{}
+
+	result, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fake-image")}, workflowCtx, action)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
