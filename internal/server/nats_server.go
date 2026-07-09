@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,10 +105,15 @@ func (s *NatsServer) processMessage(ctx context.Context, workerID int, msg *nats
 
 	log.Printf("[Worker %d] Received action request on subject: %s", workerID, msg.Subject)
 
+	replySubj := msg.Header.Get("Reply-Subject")
+	if replySubj == "" && !strings.HasPrefix(msg.Reply, "$JS.ACK") {
+		replySubj = msg.Reply
+	}
+
 	req := &pb.PerformActionRequest{}
 	if err := proto.Unmarshal(msg.Data, req); err != nil {
 		log.Printf("[Worker %d] Error unmarshaling request: %v", workerID, err)
-		s.sendErrorReply(msg.Reply, fmt.Sprintf("invalid payload: %v", err))
+		s.sendErrorReply(replySubj, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
@@ -120,7 +126,7 @@ func (s *NatsServer) processMessage(ctx context.Context, workerID int, msg *nats
 		text, err = parser.ExtractPdfText(req.GetInputBytes())
 		if err != nil {
 			log.Printf("[Worker %d] Error extracting text from binary: %v", workerID, err)
-			s.sendErrorReply(msg.Reply, fmt.Sprintf("failed to extract text from binary input: %v", err))
+			s.sendErrorReply(replySubj, fmt.Sprintf("failed to extract text from binary input: %v", err))
 			return
 		}
 	} else if req.GetInputText() == " " {
@@ -131,7 +137,7 @@ func (s *NatsServer) processMessage(ctx context.Context, workerID int, msg *nats
 	result, err := s.analyzer.AnalyzeText(ctx, text, req.GetContext(), req.GetCurrentAction())
 	if err != nil {
 		log.Printf("[Worker %d] AI analysis failed: %v", workerID, err)
-		s.sendErrorReply(msg.Reply, fmt.Sprintf("failed to perform action on text: %v", err))
+		s.sendErrorReply(replySubj, fmt.Sprintf("failed to perform action on text: %v", err))
 		return
 	}
 
@@ -147,13 +153,13 @@ func (s *NatsServer) processMessage(ctx context.Context, workerID int, msg *nats
 		return
 	}
 
-	// Publish response to the dynamically requested Reply subject (JetStream)
-	if msg.Reply != "" {
-		if _, err := s.js.Publish(msg.Reply, respBytes); err != nil {
-			log.Printf("[Worker %d] Failed to publish reply to JetStream %s: %v", workerID, msg.Reply, err)
+	// Publish response to the dynamically requested Reply subject via Core NATS
+	if replySubj != "" {
+		if err := s.nc.Publish(replySubj, respBytes); err != nil {
+			log.Printf("[Worker %d] Failed to publish reply to NATS %s: %v", workerID, replySubj, err)
 		}
 	}
-	log.Printf("[Worker %d] Successfully completed action and replied to %s", workerID, msg.Reply)
+	log.Printf("[Worker %d] Successfully completed action and replied to %s", workerID, replySubj)
 }
 
 func (s *NatsServer) sendErrorReply(replySubject, errMsg string) {
@@ -165,5 +171,5 @@ func (s *NatsServer) sendErrorReply(replySubject, errMsg string) {
 		ErrorMessage: errMsg,
 	}
 	respBytes, _ := proto.Marshal(resp)
-	_, _ = s.js.Publish(replySubject, respBytes)
+	_ = s.nc.Publish(replySubject, respBytes)
 }
