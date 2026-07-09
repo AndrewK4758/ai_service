@@ -53,26 +53,9 @@ func buildPrompt(workflowCtx *pb.WorkflowContext, action *pb.ActionDefinition, d
 	}
 	prompt := basePrompt + "\n"
 
-	isOrchPrimitive := false
-	if action != nil {
-		p := action.OrchestratorPrimitive
-		if p == "PLANNING_PRIMITIVE" || p == "REVIEW_PRIMITIVE" || p == "VALIDATION_PRIMITIVE" || p == "ASSEMBLY_PRIMITIVE" {
-			isOrchPrimitive = true
-		}
-	}
-
-	if workflowCtx != nil && !isOrchPrimitive {
+	if workflowCtx != nil {
 		if workflowCtx.JobDefinition != nil && workflowCtx.JobDefinition.GlobalInstructions != "" {
 			prompt += fmt.Sprintf("\nGlobal Job Instructions:\n%s\n", workflowCtx.JobDefinition.GlobalInstructions)
-		}
-
-		if workflowCtx.CurrentStep != nil {
-			if workflowCtx.CurrentStep.CustomInstructions != "" {
-				prompt += fmt.Sprintf("\nStep Specific Instructions:\n%s\n", workflowCtx.CurrentStep.CustomInstructions)
-			}
-			if workflowCtx.CurrentStep.ExpectedSchema != "" {
-				prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", workflowCtx.CurrentStep.ExpectedSchema)
-			}
 		}
 
 		if workflowCtx.GlobalState != nil {
@@ -81,10 +64,25 @@ func buildPrompt(workflowCtx *pb.WorkflowContext, action *pb.ActionDefinition, d
 				prompt += fmt.Sprintf("\nCurrent Global State:\n%s\n", string(stateBytes))
 			}
 		}
+
+		if workflowCtx.ActionState != nil {
+			actionBytes, err := workflowCtx.ActionState.MarshalJSON()
+			if err == nil {
+				prompt += fmt.Sprintf("\nCurrent Action State (Modify this):\n%s\n", string(actionBytes))
+			}
+		}
 	}
 
-	if action != nil && !isOrchPrimitive {
-		prompt += fmt.Sprintf("\nYour exact Task to execute right now:\n%s\n", action.Name)
+	if action != nil {
+		if action.Name != "" {
+			prompt += fmt.Sprintf("\nYour exact Task to execute right now:\n%s\n", action.Name)
+		}
+		if action.Prompt != "" {
+			prompt += fmt.Sprintf("\nTask Instructions:\n%s\n", action.Prompt)
+		}
+		if action.ExpectedOutputSchema != "" {
+			prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", action.ExpectedOutputSchema)
+		}
 	}
 
 	prompt += "\nDocument Content / Input:\n" + documentContent
