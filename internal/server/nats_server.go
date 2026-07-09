@@ -153,9 +153,9 @@ func (s *NatsServer) processMessage(ctx context.Context, workerID int, msg *nats
 		return
 	}
 
-	// Publish response to the dynamically requested Reply subject via Core NATS
+	// Publish response to the dynamically requested Reply subject via JetStream
 	if replySubj != "" {
-		if err := s.nc.Publish(replySubj, respBytes); err != nil {
+		if _, err := s.js.Publish(replySubj, respBytes); err != nil {
 			log.Printf("[Worker %d] Failed to publish reply to NATS %s: %v", workerID, replySubj, err)
 		}
 	}
@@ -171,5 +171,5 @@ func (s *NatsServer) sendErrorReply(replySubject, errMsg string) {
 		ErrorMessage: errMsg,
 	}
 	respBytes, _ := proto.Marshal(resp)
-	_ = s.nc.Publish(replySubject, respBytes)
+	_, _ = s.js.Publish(replySubject, respBytes)
 }
