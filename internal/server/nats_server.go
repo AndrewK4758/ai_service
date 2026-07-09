@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -49,14 +50,20 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: "ai.action.>",
 		MaxAckPending: s.workerPoolSize,
+		AckWait:       10 * time.Minute,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create JetStream consumer: %w", err)
 	}
 
 	log.Printf("Starting AI consumer with MaxAckPending=%d...", s.workerPoolSize)
+	sem := make(chan struct{}, s.workerPoolSize)
 	cc, err := cons.Consume(func(msg jetstream.Msg) {
-		s.processMessage(ctx, msg)
+		sem <- struct{}{}
+		go func(m jetstream.Msg) {
+			defer func() { <-sem }()
+			s.processMessage(ctx, m)
+		}(msg)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start consuming: %w", err)
@@ -68,8 +75,12 @@ func (s *NatsServer) Start(ctx context.Context) error {
 }
 
 func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
-	// Acknowledge the message so it doesn't redeliver unless we explicitly fail to ack
-	msg.Ack()
+	// Acknowledge the message so it doesn't redeliver
+	defer func() {
+		if err := msg.Ack(); err != nil {
+			log.Printf("Failed to ack msg: %v", err)
+		}
+	}()
 
 	log.Printf("Received action request on subject: %s", msg.Subject())
 
