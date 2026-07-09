@@ -47,3 +47,8 @@
 - **Autonomous Primitive Actions:** The client does NOT pass hardcoded Action Types (like "AI_EXTRACTION") to the Orchestrator. The client simply passes `CustomInstructions` and an `ExpectedSchema`.
 - **Backend Planner:** The Orchestrator leverages a fast internal AI Planner (ReAct engine) to evaluate the client's step and autonomously route it to the correct internal primitive handler (e.g., `PRIMITIVE_AI_STEP` or `PRIMITIVE_HUMAN_STEP`).
 - **Agnostic Services:** The backend services contain absolutely zero app-specific strings, hardcoded logic, or fallback rules. Every fallback, routing decision, and retry is controlled by the external client.
+
+## Messaging & Queues (NATS JetStream)
+- **JetStream Exclusivity:** All internal message queues, streams, and request/reply patterns MUST use NATS JetStream. We will NEVER switch away from NATS JetStream under any circumstances. Never bypass JetStream by using Core NATS for direct publishing or consuming if a queue is involved.
+- **JetStream v2 API Only:** Always use the modern JetStream v2 API (`github.com/nats-io/nats.go/jetstream`). Use pull-based consumers (`cons.Consume`) instead of the legacy v1 API push consumers (`QueueSubscribeSync`, etc.) to guarantee stability and prevent silent delivery failures.
+- **Multiplexed Consumers:** To prevent JetStream consensus exhaustion and timeouts, avoid dynamically creating ephemeral JetStream consumers for every single RPC request. Instead, use a single durable or multiplexed JetStream consumer per service instance that listens to a wildcard response subject, and route the incoming messages asynchronously to the correct waiting routine via internal channels or sync.Map.
