@@ -45,7 +45,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 	}
 
 	cons, err := s.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
-		Durable:       "ai_workers",
+		Durable:       "ai_service_workers",
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: "ai.action.>",
 		MaxAckPending: s.workerPoolSize,
