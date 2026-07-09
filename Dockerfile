@@ -7,8 +7,8 @@ WORKDIR /app
 # we set the Docker build context to the root doc_processor_service directory
 COPY shared_protos/ ./shared_protos/
 COPY ai_service/ ./ai_service/
-
 WORKDIR /app/ai_service
+RUN go mod edit -replace github.com/AndrewK4758/shared_protos=../shared_protos
 
 # Download dependencies
 RUN go mod download
