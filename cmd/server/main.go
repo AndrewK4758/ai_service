@@ -13,6 +13,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func main() {
@@ -65,9 +66,9 @@ func main() {
 		defer nc.Close()
 	}
 
-	var js nats.JetStreamContext
+	var js jetstream.JetStream
 	if nc != nil {
-		js, err = nc.JetStream()
+		js, err = jetstream.New(nc)
 		if err != nil {
 			log.Fatalf("Warning: failed to initialize JetStream: %v", err)
 		}
