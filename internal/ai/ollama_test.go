@@ -12,14 +12,11 @@ import (
 )
 
 func TestBuildPrompt(t *testing.T) {
-	workflowCtx := &pb.WorkflowContext{
-		CurrentStep: &pb.StepDefinition{
-			CustomInstructions: "Ignore everything else",
-			ExpectedSchema:     `{"type": "object"}`,
-		},
-	}
+	workflowCtx := &pb.WorkflowContext{}
 	action := &pb.ActionDefinition{
-		Name: "Extract Invoice",
+		Name:                 "Extract Invoice",
+		Prompt:               "Ignore everything else",
+		ExpectedOutputSchema: `{"type": "object"}`,
 	}
 	content := "Invoice 123"
 
@@ -29,7 +26,7 @@ func TestBuildPrompt(t *testing.T) {
 		t.Error("Prompt missing Action Name")
 	}
 	if !strings.Contains(prompt, "Ignore everything else") {
-		t.Error("Prompt missing CustomInstructions")
+		t.Error("Prompt missing Task Instructions")
 	}
 	if !strings.Contains(prompt, `{"type": "object"}`) {
 		t.Error("Prompt missing JsonSchema")

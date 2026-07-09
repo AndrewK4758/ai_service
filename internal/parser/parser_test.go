@@ -43,7 +43,7 @@ func TestExtractDocxText_NoDocumentXML(t *testing.T) {
 func TestExtractDocxText_Valid(t *testing.T) {
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
-	
+
 	f, _ := w.Create("word/document.xml")
 	f.Write([]byte(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
