@@ -2,7 +2,7 @@
 
 This is a blazing-fast, highly-concurrent, 100% local Go microservice that processes documents (PDFs, DOCX, and Images) and uses local AI models to extract structured JSON metadata. 
 
-It acts as an **asynchronous event-driven** gateway between your frontend/API and a local Ollama AI instance, utilizing **NATS JetStream** for robust, guaranteed delivery.
+It acts as an **asynchronous event-driven** gateway between your frontend/API and a local OpenAI-compatible AI instance (Ollama, vLLM, LMStudio), utilizing **NATS JetStream** for robust, guaranteed delivery.
 
 ## 🏗 Architecture
 1. **The Client (.NET / C#)** sends a file or batch of files via gRPC, providing an `app_id` and an optional `correlation_id`.
@@ -10,24 +10,21 @@ It acts as an **asynchronous event-driven** gateway between your frontend/API an
 3. **The Worker Pool** (running multiple Go coroutines per app) picks up the jobs concurrently.
    - If it's a `.docx` or text `.pdf`, it uses pure-Go libraries to instantly parse the text.
    - If it's an image `.pdf`, it converts it to images.
-4. **The AI Engine (Ollama)** processes the data in parallel and extracts strict JSON metadata.
+4. **The AI Engine (OpenAI-compatible)** processes the data in parallel and extracts strict JSON metadata.
 5. **NATS JetStream** receives the final JSON from the workers and reliably pushes it to the waiting client applications on topics like `ai.processed.<app_id>`.
 
 ---
 
-## 🛠 1. Prerequisites & Installation
+Because this architecture runs 100% locally on your machine's GPU, you must run an OpenAI-compatible server on your host machine (like Ollama or vLLM).
 
-### A. Install Ollama
-Because this architecture runs 100% locally on your machine's GPU, you must install Ollama natively on your host machine.
-
-**For Linux (Arch/Ubuntu/etc):**
+If you are using Ollama, **For Linux (Arch/Ubuntu/etc):**
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 *(Note: If you use a different OS, visit [ollama.com/download](https://ollama.com/download))*
 
 ### B. Pull the AI Models
-Once Ollama is installed, open a terminal and pull the fast, lightweight models we use in this service. 
+Once your engine is installed, ensure you have the required models available.
 
 **The Text Model** (For analyzing extracted text from PDFs and DOCX files):
 ```bash
@@ -39,18 +36,8 @@ ollama pull gemma4:2b
 ollama pull glm-ocr
 ```
 
-### C. Enable Ollama Concurrency
-To allow Ollama to process multiple files simultaneously, you must configure it to handle parallel requests.
-If running Ollama via systemd:
-```bash
-sudo systemctl edit ollama.service
-```
-Add the following to the override file:
-```ini
-[Service]
-Environment="OLLAMA_NUM_PARALLEL=5"
-```
-Restart the service: `sudo systemctl restart ollama`.
+### C. Enable Concurrency
+To allow your engine to process multiple files simultaneously, you must configure it to handle parallel requests.
 
 ---
 
@@ -59,10 +46,10 @@ Restart the service: `sudo systemctl restart ollama`.
 ### Docker (All Platforms - Recommended)
 1. Ensure the `.env` file exists in the root of the project:
    ```env
-   OLLAMA_HOST=http://127.0.0.1:11434
-   OLLAMA_TEXT_MODEL=gemma4:2b
-   OLLAMA_VISION_MODEL=glm-ocr
-   OLLAMA_NUM_PARALLEL=5
+   OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+   OPENAI_TEXT_MODEL=gemma4:2b
+   OPENAI_VISION_MODEL=glm-ocr
+   OPENAI_NUM_PARALLEL=6
    NATS_URL=nats://127.0.0.1:4222
    SERVER_PORT=50051
    APP_QUEUE_SIZE=100
@@ -74,20 +61,20 @@ Restart the service: `sudo systemctl restart ollama`.
    ```
 
 ### Local Development (Linux / macOS)
-1. Ensure Ollama and NATS are running locally.
+1. Ensure your engine and NATS are running locally.
 2. Set environment variables and run:
    ```bash
-   export OLLAMA_HOST=http://127.0.0.1:11434
+   export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
    export NATS_URL=nats://127.0.0.1:4222
    export SERVER_PORT=50051
    go run cmd/server/main.go
    ```
 
 ### Local Development (Windows PowerShell)
-1. Ensure Ollama and NATS are running locally.
+1. Ensure your engine and NATS are running locally.
 2. Set environment variables and run:
    ```powershell
-   $env:OLLAMA_HOST="http://127.0.0.1:11434"
+   $env:OPENAI_BASE_URL="http://127.0.0.1:11434/v1"
    $env:NATS_URL="nats://127.0.0.1:4222"
    $env:SERVER_PORT="50051"
    go run cmd\server\main.go

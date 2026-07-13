@@ -38,20 +38,20 @@ func main() {
 		log.Fatalf("invalid WORKER_POOL_SIZE: %v", err)
 	}
 
-	ollamaHost := os.Getenv("OLLAMA_HOST")
-	if ollamaHost == "" {
-		ollamaHost = "http://host.docker.internal:11434"
+	aiHost := os.Getenv("OPENAI_BASE_URL")
+	if aiHost == "" {
+		aiHost = "http://localhost:11434/v1" // default for local Ollama via OpenAI spec
 	}
 
 	// Configure the dual AI models
-	ollamaTextModel := os.Getenv("OLLAMA_TEXT_MODEL")
-	if ollamaTextModel == "" {
-		ollamaTextModel = "llama3" // Standard model for DOCX/PDF
+	aiTextModel := os.Getenv("OPENAI_TEXT_MODEL")
+	if aiTextModel == "" {
+		aiTextModel = "llama3" // Standard model for DOCX/PDF
 	}
 
-	ollamaVisionModel := os.Getenv("OLLAMA_VISION_MODEL")
-	if ollamaVisionModel == "" {
-		ollamaVisionModel = "glm-ocr" // Vision model for images
+	aiVisionModel := os.Getenv("OPENAI_VISION_MODEL")
+	if aiVisionModel == "" {
+		aiVisionModel = "glm-ocr" // Vision model for images
 	}
 
 	// Connect to NATS
@@ -76,12 +76,12 @@ func main() {
 		log.Fatalf("NATS connection is required for ai_service")
 	}
 
-	// Initialize the AI Analyzer with both models
-	ollamaAnalyzer := ai.NewOllamaAnalyzer(ollamaHost, ollamaTextModel, ollamaVisionModel)
+	// Initialize the AI Analyzer (Strictly OpenAI Spec)
+	analyzer := ai.NewOpenAIAnalyzer(aiHost, aiTextModel, aiVisionModel)
 
-	natsServer := server.NewNatsServer(nc, js, ollamaAnalyzer, workerPoolSize)
+	natsServer := server.NewNatsServer(nc, js, analyzer, workerPoolSize)
 
-	log.Printf("Ollama Host: %s | Text Model: %s | Vision Model: %s", ollamaHost, ollamaTextModel, ollamaVisionModel)
+	log.Printf("AI Engine: OpenAI Spec | Host: %s | Text Model: %s | Vision Model: %s", aiHost, aiTextModel, aiVisionModel)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
