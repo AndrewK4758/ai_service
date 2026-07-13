@@ -34,10 +34,15 @@ type openAIMessage struct {
 	Content interface{} `json:"content"` // can be string or array of objects for vision
 }
 
+type openAIResponseFormat struct {
+	Type string `json:"type"`
+}
+
 type openAIRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openAIMessage `json:"messages"`
-	Temperature float32         `json:"temperature"`
+	Model          string                  `json:"model"`
+	Messages       []openAIMessage         `json:"messages"`
+	Temperature    float32                 `json:"temperature"`
+	ResponseFormat *openAIResponseFormat   `json:"response_format,omitempty"`
 }
 
 type openAIResponse struct {
@@ -114,6 +119,9 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 			},
 		},
 		Temperature: 0.0, // Strict adherence for 0% creativity
+		ResponseFormat: &openAIResponseFormat{
+			Type: "json_object",
+		},
 	}
 
 	return o.callOpenAI(ctx, reqBody)
@@ -147,6 +155,9 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 			},
 		},
 		Temperature: 0.0,
+		ResponseFormat: &openAIResponseFormat{
+			Type: "json_object",
+		},
 	}
 
 	return o.callOpenAI(ctx, reqBody)
