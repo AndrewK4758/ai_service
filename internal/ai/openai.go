@@ -40,10 +40,10 @@ type openAIResponseFormat struct {
 }
 
 type openAIRequest struct {
-	Model          string                  `json:"model"`
-	Messages       []openAIMessage         `json:"messages"`
-	Temperature    float32                 `json:"temperature"`
-	ResponseFormat *openAIResponseFormat   `json:"response_format,omitempty"`
+	Model          string                `json:"model"`
+	Messages       []openAIMessage       `json:"messages"`
+	Temperature    float32               `json:"temperature"`
+	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
 }
 
 type openAIResponse struct {
@@ -76,7 +76,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 		Timeout: 5 * time.Minute,
 	}
 
-	log.Printf("[OpenAI/vLLM] Sending request to %s with model %s", url, reqBody.Model)
+	log.Printf("[Ai Service] Sending request to %s with model %s", url, reqBody.Model)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -89,7 +89,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 		return "", fmt.Errorf("failed to read openai response body: %w", err)
 	}
 
-	log.Printf("[OpenAI/vLLM] Received response status %d", resp.StatusCode)
+	log.Printf("[Ai Service] Received response status %d", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("openai endpoint returned status %d: %s", resp.StatusCode, string(bodyBytes))
