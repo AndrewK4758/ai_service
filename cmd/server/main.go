@@ -76,10 +76,15 @@ func main() {
 		log.Fatalf("NATS connection is required for ai_service")
 	}
 
+	queueFilter := os.Getenv("QUEUE_MODEL_FILTER")
+	if queueFilter == "" {
+		queueFilter = ">" // consume all by default
+	}
+
 	// Initialize the AI Analyzer (Strictly OpenAI Spec)
 	analyzer := ai.NewOpenAIAnalyzer(aiHost, aiTextModel, aiVisionModel)
 
-	natsServer := server.NewNatsServer(nc, js, analyzer, workerPoolSize)
+	natsServer := server.NewNatsServer(nc, js, analyzer, workerPoolSize, queueFilter)
 
 	log.Printf("AI Engine: OpenAI Spec | Host: %s | Text Model: %s | Vision Model: %s", aiHost, aiTextModel, aiVisionModel)
 

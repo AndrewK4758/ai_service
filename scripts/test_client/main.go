@@ -117,7 +117,7 @@ func main() {
 			req := &pb.ProcessDocumentRequest{
 				FileContent:  fileBytes,
 				FileName:     fileName,
-				ModelChoice:  pb.ModelChoice_MODEL_CHOICE_LOCAL,
+				ModelChoice:  pb.ModelChoice_MODEL_CHOICE_EXTRACTION,
 				AppId:        appID,
 				DocumentType: "Attorney_Closing_Invoice",
 				TargetFields: []string{

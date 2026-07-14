@@ -20,14 +20,16 @@ type NatsServer struct {
 	js             jetstream.JetStream
 	analyzer       ai.Analyzer
 	workerPoolSize int
+	queueFilter    string
 }
 
-func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, workerPoolSize int) *NatsServer {
+func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, workerPoolSize int, queueFilter string) *NatsServer {
 	return &NatsServer{
 		nc:             nc,
 		js:             js,
 		analyzer:       analyzer,
 		workerPoolSize: workerPoolSize,
+		queueFilter:    queueFilter,
 	}
 }
 
@@ -45,10 +47,17 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		log.Printf("Successfully created JetStream stream: %s", streamName)
 	}
 
+	durableName := fmt.Sprintf("ai_service_workers_%s", s.queueFilter)
+	filterSubject := fmt.Sprintf("ai.action.%s.>", s.queueFilter)
+	if s.queueFilter == ">" {
+		durableName = "ai_service_workers_all"
+		filterSubject = "ai.action.>"
+	}
+
 	cons, err := s.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
-		Durable:       "ai_service_workers",
+		Durable:       durableName,
 		AckPolicy:     jetstream.AckExplicitPolicy,
-		FilterSubject: "ai.action.>",
+		FilterSubject: filterSubject,
 		MaxAckPending: s.workerPoolSize,
 		AckWait:       10 * time.Minute,
 	})
