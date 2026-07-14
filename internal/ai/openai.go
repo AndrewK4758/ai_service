@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
 )
@@ -60,6 +61,9 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 	}
 
 	url := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(o.BaseURL, "/"))
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
@@ -68,13 +72,15 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 	// For vLLM local, auth token is optional, but we set it just in case
 	req.Header.Set("Authorization", "Bearer EMPTY")
 
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 5 * time.Minute,
+	}
 
 	log.Printf("[OpenAI/vLLM] Sending request to %s with model %s", url, reqBody.Model)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to call openai endpoint: %w", err)
+		return "", fmt.Errorf("LLM inference timed out or failed: %w", err)
 	}
 	defer resp.Body.Close()
 
