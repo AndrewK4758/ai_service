@@ -43,6 +43,7 @@ type openAIRequest struct {
 	Model          string                `json:"model"`
 	Messages       []openAIMessage       `json:"messages"`
 	Temperature    float32               `json:"temperature"`
+	MaxTokens      int                   `json:"max_tokens,omitempty"`
 	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
 }
 
@@ -125,6 +126,7 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 			},
 		},
 		Temperature: 0.0, // Strict adherence for 0% creativity
+		MaxTokens:   4096,
 		ResponseFormat: &openAIResponseFormat{
 			Type: "json_object",
 		},
@@ -161,6 +163,7 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 			},
 		},
 		Temperature: 0.0,
+		MaxTokens:   4096,
 		ResponseFormat: &openAIResponseFormat{
 			Type: "json_object",
 		},
