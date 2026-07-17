@@ -31,8 +31,8 @@ func NewOpenAIAnalyzer(baseURL, textModel, visionModel string) *OpenAIAnalyzer {
 }
 
 type openAIMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"` // can be string or array of objects for vision
+	Role    string `json:"role"`
+	Content any    `json:"content"` // can be string or array of objects for vision
 }
 
 type openAIResponseFormat struct {
@@ -113,7 +113,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 	return response, nil
 }
 
-func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.WorkflowContext, action *pb.ActionDefinition) (string, error) {
+func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
 
 	reqBody := openAIRequest{
@@ -133,20 +133,20 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 	return o.callOpenAI(ctx, reqBody)
 }
 
-func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.WorkflowContext, action *pb.ActionDefinition) (string, error) {
+func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, "(See attached image(s))")
 
-	var contentArray []map[string]interface{}
-	contentArray = append(contentArray, map[string]interface{}{
+	var contentArray []map[string]any
+	contentArray = append(contentArray, map[string]any{
 		"type": "text",
 		"text": prompt,
 	})
 
 	for _, img := range imageBytes {
 		base64Img := base64.StdEncoding.EncodeToString(img)
-		contentArray = append(contentArray, map[string]interface{}{
+		contentArray = append(contentArray, map[string]any{
 			"type": "image_url",
-			"image_url": map[string]interface{}{
+			"image_url": map[string]any{
 				"url": fmt.Sprintf("data:image/jpeg;base64,%s", base64Img),
 			},
 		})
