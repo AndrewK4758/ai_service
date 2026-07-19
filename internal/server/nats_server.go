@@ -12,24 +12,29 @@ import (
 
 	"ai_service/internal/ai"
 	"ai_service/internal/parser"
+
 	pb "github.com/AndrewK4758/shared_protos"
 )
 
 type NatsServer struct {
-	nc             *nats.Conn
-	js             jetstream.JetStream
-	analyzer       ai.Analyzer
-	workerPoolSize int
-	queueFilter    string
+	nc              *nats.Conn
+	js              jetstream.JetStream
+	analyzer        ai.Analyzer
+	workerPoolSize  int
+	queueFilter     string
+	maxAckPending   int
+	pullMaxMessages int
 }
 
-func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, workerPoolSize int, queueFilter string) *NatsServer {
+func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, workerPoolSize int, queueFilter string, maxAckPending int, pullMaxMessages int) *NatsServer {
 	return &NatsServer{
-		nc:             nc,
-		js:             js,
-		analyzer:       analyzer,
-		workerPoolSize: workerPoolSize,
-		queueFilter:    queueFilter,
+		nc:              nc,
+		js:              js,
+		analyzer:        analyzer,
+		workerPoolSize:  workerPoolSize,
+		queueFilter:     queueFilter,
+		maxAckPending:   maxAckPending,
+		pullMaxMessages: pullMaxMessages,
 	}
 }
 
@@ -58,7 +63,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		Durable:       durableName,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: filterSubject,
-		MaxAckPending: s.workerPoolSize,
+		MaxAckPending: s.maxAckPending,
 		AckWait:       10 * time.Minute,
 	})
 	if err != nil {
@@ -73,7 +78,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 			defer func() { <-sem }()
 			s.processMessage(ctx, m)
 		}(msg)
-	})
+	}, jetstream.PullMaxMessages(s.pullMaxMessages))
 	if err != nil {
 		return fmt.Errorf("failed to start consuming: %w", err)
 	}

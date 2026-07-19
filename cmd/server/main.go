@@ -81,10 +81,28 @@ func main() {
 		queueFilter = ">" // consume all by default
 	}
 
+	maxAckPendingStr := os.Getenv("NATS_MAX_ACK_PENDING")
+	if maxAckPendingStr == "" {
+		maxAckPendingStr = strconv.Itoa(workerPoolSize * 10)
+	}
+	maxAckPending, err := strconv.Atoi(maxAckPendingStr)
+	if err != nil {
+		log.Fatalf("invalid NATS_MAX_ACK_PENDING: %v", err)
+	}
+
+	pullMaxMessagesStr := os.Getenv("NATS_PULL_MAX_MESSAGES")
+	if pullMaxMessagesStr == "" {
+		pullMaxMessagesStr = strconv.Itoa(workerPoolSize)
+	}
+	pullMaxMessages, err := strconv.Atoi(pullMaxMessagesStr)
+	if err != nil {
+		log.Fatalf("invalid NATS_PULL_MAX_MESSAGES: %v", err)
+	}
+
 	// Initialize the AI Analyzer (Strictly OpenAI Spec)
 	analyzer := ai.NewOpenAIAnalyzer(aiHost, aiTextModel, aiVisionModel)
 
-	natsServer := server.NewNatsServer(nc, js, analyzer, workerPoolSize, queueFilter)
+	natsServer := server.NewNatsServer(nc, js, analyzer, workerPoolSize, queueFilter, maxAckPending, pullMaxMessages)
 
 	log.Printf("AI Engine: OpenAI Spec | Host: %s | Text Model: %s | Vision Model: %s", aiHost, aiTextModel, aiVisionModel)
 

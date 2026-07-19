@@ -146,7 +146,23 @@ func main() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // Only need short timeout for async dispatch
 			defer cancel()
 
-			res, err := client.ProcessDocument(ctx, req)
+			stream, err := client.ProcessDocument(ctx)
+			if err != nil {
+				log.Printf("gRPC stream init failed for %s: %v", fileName, err)
+				return
+			}
+			
+			if err := stream.Send(req); err != nil {
+				log.Printf("gRPC send failed for %s: %v", fileName, err)
+				return
+			}
+			
+			if err := stream.CloseSend(); err != nil {
+				log.Printf("gRPC closesend failed for %s: %v", fileName, err)
+				return
+			}
+			
+			res, err := stream.Recv()
 			if err != nil {
 				log.Printf("gRPC call failed for %s: %v", fileName, err)
 				return
