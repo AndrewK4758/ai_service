@@ -130,7 +130,9 @@ func main() {
 				FileContent:  fileBytes,
 				FileName:     fileName,
 				ModelChoice:  pb.ModelChoice_MODEL_CHOICE_EXTRACTION,
-				AppId:        appID,
+				Identity: &pb.InfrastructureIdentity{
+					AppId: appID,
+				},
 				DocumentType: "Attorney_Closing_Invoice",
 				TargetFields: []string{
 					"AttorneyName", "OrderNumber", "LoanNumber",
