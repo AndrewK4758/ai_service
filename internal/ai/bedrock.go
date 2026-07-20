@@ -15,10 +15,12 @@ import (
 type BedrockAnalyzer struct {
 	textModel   string
 	visionModel string
+	temperature float32
+	maxTokens   int32
 	client      *bedrockruntime.Client
 }
 
-func NewBedrockAnalyzer(textModel, visionModel string) (*BedrockAnalyzer, error) {
+func NewBedrockAnalyzer(aiConfig OpenAIConfig) (*BedrockAnalyzer, error) {
 	ctx := context.Background()
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -27,14 +29,23 @@ func NewBedrockAnalyzer(textModel, visionModel string) (*BedrockAnalyzer, error)
 
 	client := bedrockruntime.NewFromConfig(cfg)
 	return &BedrockAnalyzer{
-		textModel:   textModel,
-		visionModel: visionModel,
+		textModel:   aiConfig.TextModel,
+		visionModel: aiConfig.VisionModel,
+		temperature: aiConfig.Temperature,
+		maxTokens:   int32(aiConfig.MaxTokens),
 		client:      client,
 	}, nil
 }
 
 func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
+
+	inferenceConfig := &types.InferenceConfiguration{
+		Temperature: &b.temperature,
+	}
+	if b.maxTokens > 0 {
+		inferenceConfig.MaxTokens = &b.maxTokens
+	}
 
 	// Bedrock Converse API
 	req := &bedrockruntime.ConverseInput{
@@ -47,9 +58,7 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflow
 				},
 			},
 		},
-		InferenceConfig: &types.InferenceConfiguration{
-			Temperature: new(float32), // 0.0
-		},
+		InferenceConfig: inferenceConfig,
 	}
 
 	log.Printf("[Ai Service] Sending Bedrock request to model %s", b.textModel)
@@ -91,6 +100,13 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 		})
 	}
 
+	inferenceConfig := &types.InferenceConfiguration{
+		Temperature: &b.temperature,
+	}
+	if b.maxTokens > 0 {
+		inferenceConfig.MaxTokens = &b.maxTokens
+	}
+
 	req := &bedrockruntime.ConverseInput{
 		ModelId: &b.visionModel,
 		Messages: []types.Message{
@@ -99,9 +115,7 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 				Content: contentBlocks,
 			},
 		},
-		InferenceConfig: &types.InferenceConfiguration{
-			Temperature: new(float32),
-		},
+		InferenceConfig: inferenceConfig,
 	}
 
 	log.Printf("[Ai Service] Sending Bedrock Vision request to model %s", b.visionModel)

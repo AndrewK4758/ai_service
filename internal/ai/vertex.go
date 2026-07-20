@@ -14,10 +14,12 @@ import (
 type VertexAnalyzer struct {
 	textModel   string
 	visionModel string
+	temperature float32
+	maxTokens   int32
 	client      *genai.Client
 }
 
-func NewVertexAnalyzer(textModel, visionModel string) (*VertexAnalyzer, error) {
+func NewVertexAnalyzer(config OpenAIConfig) (*VertexAnalyzer, error) {
 	projectID := os.Getenv("VERTEX_PROJECT_ID")
 	location := os.Getenv("VERTEX_LOCATION")
 	
@@ -32,8 +34,10 @@ func NewVertexAnalyzer(textModel, visionModel string) (*VertexAnalyzer, error) {
 	}
 
 	return &VertexAnalyzer{
-		textModel:   textModel,
-		visionModel: visionModel,
+		textModel:   config.TextModel,
+		visionModel: config.VisionModel,
+		temperature: config.Temperature,
+		maxTokens:   int32(config.MaxTokens),
 		client:      client,
 	}, nil
 }
@@ -42,7 +46,10 @@ func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 	prompt := buildPrompt(workflowCtx, action, text)
 	
 	model := v.client.GenerativeModel(v.textModel)
-	model.SetTemperature(0.0)
+	model.SetTemperature(v.temperature)
+	if v.maxTokens > 0 {
+		model.SetMaxOutputTokens(int32(v.maxTokens))
+	}
 	model.ResponseMIMEType = "application/json"
 
 	log.Printf("[Ai Service] Sending Vertex AI request to model %s", v.textModel)
@@ -71,7 +78,10 @@ func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 	}
 
 	model := v.client.GenerativeModel(v.visionModel)
-	model.SetTemperature(0.0)
+	model.SetTemperature(v.temperature)
+	if v.maxTokens > 0 {
+		model.SetMaxOutputTokens(int32(v.maxTokens))
+	}
 	model.ResponseMIMEType = "application/json"
 
 	var parts []genai.Part

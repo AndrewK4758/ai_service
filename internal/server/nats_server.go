@@ -141,22 +141,38 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 		return
 	}
 
-	var text string
-	if req.GetInputText() != "" && req.GetInputText() != " " {
-		text = req.GetInputText()
-	} else if len(req.GetInputBytes()) > 0 {
-		text, err = parser.ExtractPdfText(req.GetInputBytes())
-		if err != nil {
-			log.Printf("Error extracting text from binary: %v", err)
-			msg.Term()
-			s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to extract text from binary input: %v", err))
-			return
+	var result string
+	if req.GetModelChoice() == pb.ModelChoice_MODEL_CHOICE_OCR {
+		var imageBytes [][]byte
+		if len(req.GetInputBytes()) > 0 {
+			var cvtErr error
+			imageBytes, cvtErr = parser.ConvertPdfToImages(req.GetInputBytes())
+			if cvtErr != nil {
+				log.Printf("Error converting PDF to images: %v", cvtErr)
+				msg.Term()
+				s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to convert binary input to images: %v", cvtErr))
+				return
+			}
 		}
-	} else if req.GetInputText() == " " {
-		text = " "
+		result, err = s.analyzer.AnalyzeImage(ctx, imageBytes, req.GetContext(), req.GetCurrentAction())
+	} else {
+		text := " "
+		if req.GetInputText() != "" && req.GetInputText() != " " {
+			text = req.GetInputText()
+		}
+		if text == " " && len(req.GetInputBytes()) > 0 {
+			var extErr error
+			text, extErr = parser.ExtractPdfText(req.GetInputBytes())
+			if extErr != nil {
+				log.Printf("Error extracting text from binary: %v", extErr)
+				msg.Term()
+				s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to extract text from binary input: %v", extErr))
+				return
+			}
+		}
+		result, err = s.analyzer.AnalyzeText(ctx, text, req.GetContext(), req.GetCurrentAction())
 	}
 
-	result, err := s.analyzer.AnalyzeText(ctx, text, req.GetContext(), req.GetCurrentAction())
 	if err != nil {
 		log.Printf("AI analysis failed: %v", err)
 		errStr := strings.ToLower(err.Error())
@@ -174,14 +190,16 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 			log.Printf("Rate limited by provider, applying NakWithDelay of %v", backoffDelay)
 			msg.NakWithDelay(backoffDelay)
 			return
-		} else if isTempError {
+		} 
+		
+		if isTempError {
 			log.Printf("Temporary server error, applying NakWithDelay of 15s")
 			msg.NakWithDelay(15 * time.Second)
 			return
 		}
 		
 		msg.Term()
-		s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to perform action on text: %v", err))
+		s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to perform action on payload: %v", err))
 		return
 	}
 

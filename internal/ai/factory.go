@@ -15,9 +15,9 @@ func NewAnalyzerFactory(config OpenAIConfig) (Analyzer, error) {
 	case "OPENAI", "LOCAL":
 		return NewOpenAIAnalyzerWithConfig(config), nil
 	case "VERTEX":
-		return NewVertexAnalyzer(config.TextModel, config.VisionModel)
+		return NewVertexAnalyzer(config)
 	case "BEDROCK":
-		return NewBedrockAnalyzer(config.TextModel, config.VisionModel)
+		return NewBedrockAnalyzer(config)
 	default:
 		return nil, fmt.Errorf("unsupported AI_PROVIDER: %s", provider)
 	}
