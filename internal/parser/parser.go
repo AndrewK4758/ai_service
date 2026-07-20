@@ -65,9 +65,8 @@ func ExtractDocxText(fileBytes []byte) (string, error) {
 		return "", errors.New("word/document.xml not found in docx")
 	}
 	defer func(docXML io.ReadCloser) {
-		err := docXML.Close()
-		if err != nil {
-
+		if err := docXML.Close(); err != nil {
+			fmt.Printf("warning: failed to close word/document.xml: %v\n", err)
 		}
 	}(docXML)
 

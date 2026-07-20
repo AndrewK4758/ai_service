@@ -13,20 +13,58 @@ import (
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
+	"ai_service/internal/util"
 )
+
+type APIType string
+
+const (
+	APITypeOpenAI APIType = "OPEN_AI"
+	APITypeAzure  APIType = "AZURE"
+	APITypeLocal  APIType = "LOCAL"
+)
+
+type OpenAIConfig struct {
+	AuthToken   string
+	BaseURL     string
+	APIType     APIType
+	APIVersion  string
+	HTTPClient  *http.Client
+	TextModel   string
+	VisionModel string
+	Temperature float32
+	MaxTokens   int
+}
+
+func DefaultConfig(authToken string) OpenAIConfig {
+	return OpenAIConfig{
+		AuthToken:  authToken,
+		BaseURL:    "https://api.openai.com/v1",
+		APIType:    APITypeOpenAI,
+		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
+		Temperature: 0.0,
+		MaxTokens:   4096,
+	}
+}
+
+func DefaultLocalConfig() OpenAIConfig {
+	config := DefaultConfig("EMPTY")
+	config.BaseURL = "http://localhost:11434/v1"
+	config.APIType = APITypeLocal
+	return config
+}
 
 // OpenAIAnalyzer implements the Analyzer interface for OpenAI-compatible endpoints (like vLLM)
 type OpenAIAnalyzer struct {
-	BaseURL     string
-	TextModel   string
-	VisionModel string
+	config OpenAIConfig
 }
 
-func NewOpenAIAnalyzer(baseURL, textModel, visionModel string) *OpenAIAnalyzer {
+func NewOpenAIAnalyzerWithConfig(config OpenAIConfig) *OpenAIAnalyzer {
+	if config.HTTPClient == nil {
+		config.HTTPClient = &http.Client{Timeout: 5 * time.Minute}
+	}
 	return &OpenAIAnalyzer{
-		BaseURL:     baseURL,
-		TextModel:   textModel,
-		VisionModel: visionModel,
+		config: config,
 	}
 }
 
@@ -61,8 +99,14 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 		return "", fmt.Errorf("failed to marshal openai request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(o.BaseURL, "/"))
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	url := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(o.config.BaseURL, "/"))
+	
+	// Create context using the HTTP client's timeout for safety, default to 5m if 0
+	timeout := o.config.HTTPClient.Timeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
@@ -70,16 +114,16 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	// For vLLM local, auth token is optional, but we set it just in case
-	req.Header.Set("Authorization", "Bearer EMPTY")
-
-	client := &http.Client{
-		Timeout: 5 * time.Minute,
+	
+	if o.config.APIType == APITypeAzure {
+		req.Header.Set("api-key", o.config.AuthToken)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+o.config.AuthToken)
 	}
 
 	log.Printf("[Ai Service] Sending request to %s with model %s", url, reqBody.Model)
 
-	resp, err := client.Do(req)
+	resp, err := o.config.HTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("LLM inference timed out or failed: %w", err)
 	}
@@ -105,11 +149,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 		return "", fmt.Errorf("openai endpoint returned no choices")
 	}
 
-	response := strings.TrimSpace(oaiResp.Choices[0].Message.Content)
-	response = strings.TrimPrefix(response, "```json")
-	response = strings.TrimPrefix(response, "```")
-	response = strings.TrimSuffix(response, "```")
-	response = strings.TrimSpace(response)
+	response := util.CleanJSON(oaiResp.Choices[0].Message.Content)
 
 	return response, nil
 }
@@ -118,15 +158,15 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 	prompt := buildPrompt(workflowCtx, action, text)
 
 	reqBody := openAIRequest{
-		Model: o.TextModel,
+		Model: o.config.TextModel,
 		Messages: []openAIMessage{
 			{
 				Role:    "user",
 				Content: prompt,
 			},
 		},
-		Temperature: 0.0, // Strict adherence for 0% creativity
-		MaxTokens:   4096,
+		Temperature: o.config.Temperature,
+		MaxTokens:   o.config.MaxTokens,
 		ResponseFormat: &openAIResponseFormat{
 			Type: "json_object",
 		},
@@ -155,15 +195,15 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 	}
 
 	reqBody := openAIRequest{
-		Model: o.VisionModel,
+		Model: o.config.VisionModel,
 		Messages: []openAIMessage{
 			{
 				Role:    "user",
 				Content: contentArray,
 			},
 		},
-		Temperature: 0.0,
-		MaxTokens:   4096,
+		Temperature: o.config.Temperature,
+		MaxTokens:   o.config.MaxTokens,
 		ResponseFormat: &openAIResponseFormat{
 			Type: "json_object",
 		},

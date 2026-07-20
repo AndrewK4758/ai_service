@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"ai_service/internal/ai"
 	"ai_service/internal/server"
@@ -61,19 +63,13 @@ func main() {
 	}
 	nc, err := nats.Connect(natsURL)
 	if err != nil {
-		log.Printf("Warning: failed to connect to NATS (%v), JetStream publishing will be disabled", err)
-	} else {
-		defer nc.Close()
+		log.Fatalf("NATS connection is required for ai_service: %v", err)
 	}
+	defer nc.Close()
 
-	var js jetstream.JetStream
-	if nc != nil {
-		js, err = jetstream.New(nc)
-		if err != nil {
-			log.Fatalf("Warning: failed to initialize JetStream: %v", err)
-		}
-	} else {
-		log.Fatalf("NATS connection is required for ai_service")
+	js, err := jetstream.New(nc)
+	if err != nil {
+		log.Fatalf("failed to initialize JetStream: %v", err)
 	}
 
 	queueFilter := os.Getenv("QUEUE_MODEL_FILTER")
@@ -99,8 +95,57 @@ func main() {
 		log.Fatalf("invalid NATS_PULL_MAX_MESSAGES: %v", err)
 	}
 
-	// Initialize the AI Analyzer (Strictly OpenAI Spec)
-	analyzer := ai.NewOpenAIAnalyzer(aiHost, aiTextModel, aiVisionModel)
+	temperatureStr := os.Getenv("OPENAI_TEMPERATURE")
+	if temperatureStr == "" {
+		temperatureStr = "0.0"
+	}
+	temperature, err := strconv.ParseFloat(temperatureStr, 32)
+	if err != nil {
+		log.Fatalf("invalid OPENAI_TEMPERATURE: %v", err)
+	}
+
+	maxTokensStr := os.Getenv("OPENAI_MAX_TOKENS")
+	if maxTokensStr == "" {
+		maxTokensStr = "4096"
+	}
+	maxTokens, err := strconv.Atoi(maxTokensStr)
+	if err != nil {
+		log.Fatalf("invalid OPENAI_MAX_TOKENS: %v", err)
+	}
+
+	timeoutStr := os.Getenv("OPENAI_TIMEOUT_MINUTES")
+	if timeoutStr == "" {
+		timeoutStr = "5"
+	}
+	timeout, err := strconv.Atoi(timeoutStr)
+	if err != nil {
+		log.Fatalf("invalid OPENAI_TIMEOUT_MINUTES: %v", err)
+	}
+
+	// Initialize the AI Analyzer config
+	config := ai.DefaultLocalConfig()
+	config.BaseURL = aiHost
+	config.TextModel = aiTextModel
+	config.VisionModel = aiVisionModel
+	config.Temperature = float32(temperature)
+	config.MaxTokens = maxTokens
+	config.HTTPClient = &http.Client{
+		Timeout: time.Duration(timeout) * time.Minute,
+	}
+
+	apiType := os.Getenv("OPENAI_API_TYPE")
+	if apiType != "" {
+		config.APIType = ai.APIType(apiType)
+	}
+	authToken := os.Getenv("OPENAI_AUTH_TOKEN")
+	if authToken != "" {
+		config.AuthToken = authToken
+	}
+
+	analyzer, err := ai.NewAnalyzerFactory(config)
+	if err != nil {
+		log.Fatalf("failed to initialize AI analyzer: %v", err)
+	}
 
 	natsServer := server.NewNatsServer(nc, js, analyzer, workerPoolSize, queueFilter, maxAckPending, pullMaxMessages)
 

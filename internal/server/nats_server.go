@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -12,6 +13,7 @@ import (
 
 	"ai_service/internal/ai"
 	"ai_service/internal/parser"
+	"ai_service/internal/util"
 
 	pb "github.com/AndrewK4758/shared_protos"
 )
@@ -64,7 +66,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: filterSubject,
 		MaxAckPending: s.maxAckPending,
-		AckWait:       10 * time.Minute,
+		AckWait:       1 * time.Minute,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create JetStream consumer: %w", err)
@@ -89,12 +91,40 @@ func (s *NatsServer) Start(ctx context.Context) error {
 }
 
 func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
-	// Acknowledge the message so it doesn't redeliver
-	defer func() {
-		if err := msg.Ack(); err != nil {
-			log.Printf("Failed to ack msg: %v", err)
+	meta, err := msg.Metadata()
+	if err == nil && meta.NumDelivered > 5 {
+		log.Printf("Message exceeded max delivery attempts, terminating")
+		msg.Term()
+		
+		replySubj := ""
+		if headers := msg.Headers(); headers != nil {
+			replySubj = headers.Get("Reply-Subject")
+		}
+		s.sendErrorReply(ctx, replySubj, "Action failed after multiple retries due to rate limits.")
+		return
+	}
+	// --- START of InProgress keep-alive loop ---
+	// Send InProgress() every 30 seconds (half of the 1m AckWait)
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				if err := msg.InProgress(); err != nil {
+					log.Printf("Failed to set msg in progress: %v", err)
+				}
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
+	// --- END of InProgress keep-alive loop ---
 
 	log.Printf("Received action request on subject: %s", msg.Subject())
 
@@ -106,19 +136,19 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	req := &pb.PerformActionRequest{}
 	if err := proto.Unmarshal(msg.Data(), req); err != nil {
 		log.Printf("Error unmarshaling request: %v", err)
+		msg.Term()
 		s.sendErrorReply(ctx, replySubj, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	var text string
-	var err error
-
 	if req.GetInputText() != "" && req.GetInputText() != " " {
 		text = req.GetInputText()
 	} else if len(req.GetInputBytes()) > 0 {
 		text, err = parser.ExtractPdfText(req.GetInputBytes())
 		if err != nil {
 			log.Printf("Error extracting text from binary: %v", err)
+			msg.Term()
 			s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to extract text from binary input: %v", err))
 			return
 		}
@@ -129,9 +159,33 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	result, err := s.analyzer.AnalyzeText(ctx, text, req.GetContext(), req.GetCurrentAction())
 	if err != nil {
 		log.Printf("AI analysis failed: %v", err)
+		errStr := strings.ToLower(err.Error())
+		
+		var attempts uint64 = 1
+		if meta != nil {
+			attempts = meta.NumDelivered
+		}
+
+		isRateLimit := strings.Contains(errStr, "429") || strings.Contains(errStr, "too many requests") || strings.Contains(errStr, "throttlingexception") || strings.Contains(errStr, "quota")
+		isTempError := strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "eof")
+
+		if isRateLimit {
+			backoffDelay := time.Duration(1<<attempts) * 5 * time.Second
+			log.Printf("Rate limited by provider, applying NakWithDelay of %v", backoffDelay)
+			msg.NakWithDelay(backoffDelay)
+			return
+		} else if isTempError {
+			log.Printf("Temporary server error, applying NakWithDelay of 15s")
+			msg.NakWithDelay(15 * time.Second)
+			return
+		}
+		
+		msg.Term()
 		s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to perform action on text: %v", err))
 		return
 	}
+
+	result = util.CleanJSON(result)
 
 	resp := &pb.PerformActionResponse{
 		Success:          true,
@@ -141,15 +195,23 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	respBytes, err := proto.Marshal(resp)
 	if err != nil {
 		log.Printf("Failed to marshal response: %v", err)
+		msg.Term()
 		return
 	}
 
 	if replySubj != "" {
 		if _, err := s.js.Publish(ctx, replySubj, respBytes); err != nil {
 			log.Printf("Failed to publish reply to NATS %s: %v", replySubj, err)
+			msg.NakWithDelay(5 * time.Second) // Retry if NATS publish fails
+			return
 		}
 	}
-	log.Printf("Successfully completed action and replied to %s", replySubj)
+	
+	if err := msg.Ack(); err != nil {
+		log.Printf("Failed to ack msg: %v", err)
+	} else {
+		log.Printf("Successfully completed action and replied to %s", replySubj)
+	}
 }
 
 func (s *NatsServer) sendErrorReply(ctx context.Context, replySubject, errMsg string) {

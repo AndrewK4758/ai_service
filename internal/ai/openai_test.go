@@ -80,7 +80,11 @@ func TestOpenAIAnalyzer_AnalyzeText(t *testing.T) {
 			}))
 			defer server.Close()
 
-			analyzer := NewOpenAIAnalyzer(server.URL, "test-text-model", "test-vision-model")
+			config := DefaultLocalConfig()
+			config.BaseURL = server.URL
+			config.TextModel = "test-text-model"
+			config.VisionModel = "test-vision-model"
+			analyzer := NewOpenAIAnalyzerWithConfig(config)
 
 			ctx := context.Background()
 			action := &pb.ActionDefinition{Name: "test"}
@@ -117,7 +121,11 @@ func TestOpenAIAnalyzer_AnalyzeImage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	analyzer := NewOpenAIAnalyzer(server.URL, "test-text-model", "test-vision-model")
+	config := DefaultLocalConfig()
+	config.BaseURL = server.URL
+	config.TextModel = "test-text-model"
+	config.VisionModel = "test-vision-model"
+	analyzer := NewOpenAIAnalyzerWithConfig(config)
 
 	got, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fakeimage")}, nil, nil)
 	if err != nil {

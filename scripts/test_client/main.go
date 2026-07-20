@@ -12,6 +12,7 @@ import (
 	pb "github.com/AndrewK4758/shared_protos"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -69,7 +70,7 @@ func main() {
 	}
 	defer nc.Close()
 
-	js, err := nc.JetStream()
+	js, err := jetstream.New(nc)
 	if err != nil {
 		log.Fatalf("failed to init JetStream: %v", err)
 	}
@@ -77,26 +78,37 @@ func main() {
 	appID := "test_client_app"
 	subject := fmt.Sprintf("ai.processed.%s", appID)
 
+	ctxJS := context.Background()
+	streamName := "AI_PROCESSED"
+	_, _ = js.CreateStream(ctxJS, jetstream.StreamConfig{
+		Name:     streamName,
+		Subjects: []string{"ai.processed.>"},
+	})
+
+	cons, err := js.CreateOrUpdateConsumer(ctxJS, streamName, jetstream.ConsumerConfig{
+		Durable:       "test_client_consumer",
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		FilterSubject: subject,
+		DeliverPolicy: jetstream.DeliverNewPolicy,
+	})
+	if err != nil {
+		log.Fatalf("failed to create JetStream consumer: %v", err)
+	}
+
 	// Setup a channel to block until we get all responses
 	done := make(chan []byte, len(filesToProcess))
 
-	// Subscribe to our app's specific JetStream subject
-	sub, err := js.Subscribe(subject, func(msg *nats.Msg) {
+	cc, err := cons.Consume(func(msg jetstream.Msg) {
 		err := msg.Ack()
 		if err != nil {
 			fmt.Println("Failed to ack message: ", err)
 		}
-		done <- msg.Data
-	}, nats.DeliverNew())
+		done <- msg.Data()
+	})
 	if err != nil {
-		log.Fatalf("failed to subscribe to NATS subject %s: %v", subject, err)
+		log.Fatalf("failed to consume from JetStream: %v", err)
 	}
-	defer func(sub *nats.Subscription) {
-		err := sub.Unsubscribe()
-		if err != nil {
-			fmt.Println("Failed to unsubscribe: ", err)
-		}
-	}(sub)
+	defer cc.Stop()
 
 	startTime := time.Now()
 	var wg sync.WaitGroup
