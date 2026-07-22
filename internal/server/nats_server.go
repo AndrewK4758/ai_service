@@ -12,7 +12,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"ai_service/internal/ai"
-	"ai_service/internal/parser"
 	"ai_service/internal/util"
 
 	pb "github.com/AndrewK4758/shared_protos"
@@ -55,7 +54,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 	}
 
 	durableName := fmt.Sprintf("ai_service_workers_%s", s.queueFilter)
-	filterSubject := fmt.Sprintf("ai.action.%s.>", s.queueFilter)
+	filterSubject := fmt.Sprintf("ai.action.%s", s.queueFilter)
 	if s.queueFilter == ">" {
 		durableName = "ai_service_workers_all"
 		filterSubject = "ai.action.>"
@@ -133,7 +132,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 		replySubj = headers.Get("Reply-Subject")
 	}
 
-	req := &pb.PerformActionRequest{}
+	req := &pb.ExecuteWorkflowNodeRequest{}
 	if err := proto.Unmarshal(msg.Data(), req); err != nil {
 		log.Printf("Error unmarshaling request: %v", err)
 		msg.Term()
@@ -142,36 +141,9 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	}
 
 	var result string
-	if req.GetModelChoice() == pb.ModelChoice_MODEL_CHOICE_OCR {
-		var imageBytes [][]byte
-		if len(req.GetInputBytes()) > 0 {
-			var cvtErr error
-			imageBytes, cvtErr = parser.ConvertPdfToImages(req.GetInputBytes())
-			if cvtErr != nil {
-				log.Printf("Error converting PDF to images: %v", cvtErr)
-				msg.Term()
-				s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to convert binary input to images: %v", cvtErr))
-				return
-			}
-		}
-		result, err = s.analyzer.AnalyzeImage(ctx, imageBytes, req.GetContext(), req.GetCurrentAction())
-	} else {
-		text := " "
-		if req.GetInputText() != "" && req.GetInputText() != " " {
-			text = req.GetInputText()
-		}
-		if text == " " && len(req.GetInputBytes()) > 0 {
-			var extErr error
-			text, extErr = parser.ExtractPdfText(req.GetInputBytes())
-			if extErr != nil {
-				log.Printf("Error extracting text from binary: %v", extErr)
-				msg.Term()
-				s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to extract text from binary input: %v", extErr))
-				return
-			}
-		}
-		result, err = s.analyzer.AnalyzeText(ctx, text, req.GetContext(), req.GetCurrentAction())
-	}
+	// Generic AI Worker acts strictly on the provided ExecuteWorkflowNodeRequest
+	// The client's global_state contains the context needed for analysis.
+	result, err = s.analyzer.AnalyzeText(ctx, "", req, nil)
 
 	if err != nil {
 		log.Printf("AI analysis failed: %v", err)

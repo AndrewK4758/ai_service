@@ -140,21 +140,6 @@ func main() {
 					"ClosingFee", "BorrowerSigned",
 				},
 				CustomInstructions: "Extract precisely. Missing values return null.",
-				JsonSchema: `{
-					"type": "object",
-					"properties": {
-						"AttorneyName": {"type": "string"},
-						"OrderNumber": {"type": "string"},
-						"LoanNumber": {"type": "string"},
-						"AppointmentDateTime": {"type": "string"},
-						"BorrowerNames": {"type": "array", "items": {"type": "string"}},
-						"BorrowerAddress": {"type": "string"},
-						"ClosingFee": {"type": "number"},
-						"BorrowerSigned": {"type": "boolean"},
-						"Notes": {"type": "string"}
-					},
-					"required": ["AttorneyName", "OrderNumber", "LoanNumber", "AppointmentDateTime"]
-				}`,
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // Only need short timeout for async dispatch

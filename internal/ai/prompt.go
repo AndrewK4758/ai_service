@@ -23,6 +23,10 @@ func buildPrompt(req *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition
 			prompt += fmt.Sprintf("\nGlobal Job Instructions:\n%s\n", req.NodeConfig.SystemInstructions)
 		}
 
+		if req.NodeConfig != nil && req.NodeConfig.ExpectedSchema != "" {
+			prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", req.NodeConfig.ExpectedSchema)
+		}
+
 		if req.GlobalState != nil {
 			stateJson, err := req.GlobalState.MarshalJSON()
 			if err != nil {
@@ -39,9 +43,6 @@ func buildPrompt(req *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition
 		}
 		if action.Prompt != "" {
 			prompt += fmt.Sprintf("\nTask Instructions:\n%s\n", action.Prompt)
-		}
-		if action.ExpectedOutputSchema != "" {
-			prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", action.ExpectedOutputSchema)
 		}
 	}
 
