@@ -13,7 +13,7 @@ import (
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
-	"ai_service/internal/util"
+	"github.com/AndrewK4758/shared_utils/jsonclean"
 )
 
 type APIType string
@@ -149,7 +149,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 		return "", fmt.Errorf("openai endpoint returned no choices")
 	}
 
-	response := util.CleanJSON(oaiResp.Choices[0].Message.Content)
+	response := jsonclean.CleanJSON(oaiResp.Choices[0].Message.Content)
 
 	return response, nil
 }

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"ai_service/internal/util"
 	pb "github.com/AndrewK4758/shared_protos"
+	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -136,5 +136,5 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 		return "", fmt.Errorf("bedrock returned non-text content")
 	}
 
-	return util.CleanJSON(txt.Value), nil
+	return jsonclean.CleanJSON(txt.Value), nil
 }

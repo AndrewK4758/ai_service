@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/AndrewK4758/shared_utils/logger"
+
 	"ai_service/internal/ai"
 	"ai_service/internal/server"
 
@@ -19,6 +21,7 @@ import (
 )
 
 func main() {
+	logger.InitLogger()
 	// Attempt to load .env file (ignore if it doesn't exist)
 	_ = godotenv.Load()
 

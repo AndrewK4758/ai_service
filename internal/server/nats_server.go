@@ -12,7 +12,8 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"ai_service/internal/ai"
-	"ai_service/internal/util"
+
+	"github.com/AndrewK4758/shared_utils/jsonclean"
 
 	pb "github.com/AndrewK4758/shared_protos"
 )
@@ -94,7 +95,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	if err == nil && meta.NumDelivered > 5 {
 		log.Printf("Message exceeded max delivery attempts, terminating")
 		msg.Term()
-		
+
 		replySubj := ""
 		if headers := msg.Headers(); headers != nil {
 			replySubj = headers.Get("Reply-Subject")
@@ -148,7 +149,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	if err != nil {
 		log.Printf("AI analysis failed: %v", err)
 		errStr := strings.ToLower(err.Error())
-		
+
 		var attempts uint64 = 1
 		if meta != nil {
 			attempts = meta.NumDelivered
@@ -162,20 +163,20 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 			log.Printf("Rate limited by provider, applying NakWithDelay of %v", backoffDelay)
 			msg.NakWithDelay(backoffDelay)
 			return
-		} 
-		
+		}
+
 		if isTempError {
 			log.Printf("Temporary server error, applying NakWithDelay of 15s")
 			msg.NakWithDelay(15 * time.Second)
 			return
 		}
-		
+
 		msg.Term()
 		s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to perform action on payload: %v", err))
 		return
 	}
 
-	result = util.CleanJSON(result)
+	result = jsonclean.CleanJSON(result)
 
 	resp := &pb.PerformActionResponse{
 		Success:          true,
@@ -196,7 +197,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 			return
 		}
 	}
-	
+
 	if err := msg.Ack(); err != nil {
 		log.Printf("Failed to ack msg: %v", err)
 	} else {

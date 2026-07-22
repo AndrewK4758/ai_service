@@ -6,9 +6,9 @@ import (
 	"log"
 	"os"
 
-	"ai_service/internal/util"
 	"cloud.google.com/go/vertexai/genai"
 	pb "github.com/AndrewK4758/shared_protos"
+	"github.com/AndrewK4758/shared_utils/jsonclean"
 )
 
 type VertexAnalyzer struct {
@@ -22,7 +22,7 @@ type VertexAnalyzer struct {
 func NewVertexAnalyzer(config OpenAIConfig) (*VertexAnalyzer, error) {
 	projectID := os.Getenv("VERTEX_PROJECT_ID")
 	location := os.Getenv("VERTEX_LOCATION")
-	
+
 	if projectID == "" || location == "" {
 		return nil, fmt.Errorf("VERTEX_PROJECT_ID and VERTEX_LOCATION must be set")
 	}
@@ -44,7 +44,7 @@ func NewVertexAnalyzer(config OpenAIConfig) (*VertexAnalyzer, error) {
 
 func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
-	
+
 	model := v.client.GenerativeModel(v.textModel)
 	model.SetTemperature(v.temperature)
 	if v.maxTokens > 0 {
@@ -103,7 +103,7 @@ func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 
 	part := resp.Candidates[0].Content.Parts[0]
 	if txt, ok := part.(genai.Text); ok {
-		return util.CleanJSON(string(txt)), nil
+		return jsonclean.CleanJSON(string(txt)), nil
 	}
 
 	return "", fmt.Errorf("unexpected part type from vertex")
