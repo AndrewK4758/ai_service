@@ -3,10 +3,10 @@ package ai
 import (
 	"context"
 	"fmt"
-	"log"
 
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
+	"github.com/AndrewK4758/shared_utils/logger"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -61,7 +61,7 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflow
 		InferenceConfig: inferenceConfig,
 	}
 
-	log.Printf("[Ai Service] Sending Bedrock request to model %s", b.textModel)
+	logger.Info("AI_Service", "[Ai Service] Sending Bedrock request to model %s", b.textModel)
 	resp, err := b.client.Converse(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("bedrock inference failed: %w", err)
@@ -118,7 +118,7 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 		InferenceConfig: inferenceConfig,
 	}
 
-	log.Printf("[Ai Service] Sending Bedrock Vision request to model %s", b.visionModel)
+	logger.Info("AI_Service", "[Ai Service] Sending Bedrock Vision request to model %s", b.visionModel)
 	resp, err := b.client.Converse(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("bedrock vision inference failed: %w", err)

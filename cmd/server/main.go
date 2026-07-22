@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,7 +30,7 @@ func main() {
 	}
 	_, err := strconv.Atoi(queueSizeStr)
 	if err != nil {
-		log.Fatalf("invalid APP_QUEUE_SIZE: %v", err)
+		logger.Fatal("AI_Service", "invalid APP_QUEUE_SIZE: %v", err)
 	}
 
 	workerPoolSizeStr := os.Getenv("WORKER_POOL_SIZE")
@@ -40,7 +39,7 @@ func main() {
 	}
 	workerPoolSize, err := strconv.Atoi(workerPoolSizeStr)
 	if err != nil {
-		log.Fatalf("invalid WORKER_POOL_SIZE: %v", err)
+		logger.Fatal("AI_Service", "invalid WORKER_POOL_SIZE: %v", err)
 	}
 
 	aiHost := os.Getenv("OPENAI_BASE_URL")
@@ -66,13 +65,13 @@ func main() {
 	}
 	nc, err := nats.Connect(natsURL)
 	if err != nil {
-		log.Fatalf("NATS connection is required for ai_service: %v", err)
+		logger.Fatal("AI_Service", "NATS connection is required for ai_service: %v", err)
 	}
 	defer nc.Close()
 
 	js, err := jetstream.New(nc)
 	if err != nil {
-		log.Fatalf("failed to initialize JetStream: %v", err)
+		logger.Fatal("AI_Service", "failed to initialize JetStream: %v", err)
 	}
 
 	queueFilter := os.Getenv("QUEUE_MODEL_FILTER")
@@ -86,7 +85,7 @@ func main() {
 	}
 	maxAckPending, err := strconv.Atoi(maxAckPendingStr)
 	if err != nil {
-		log.Fatalf("invalid NATS_MAX_ACK_PENDING: %v", err)
+		logger.Fatal("AI_Service", "invalid NATS_MAX_ACK_PENDING: %v", err)
 	}
 
 	pullMaxMessagesStr := os.Getenv("NATS_PULL_MAX_MESSAGES")
@@ -95,7 +94,7 @@ func main() {
 	}
 	pullMaxMessages, err := strconv.Atoi(pullMaxMessagesStr)
 	if err != nil {
-		log.Fatalf("invalid NATS_PULL_MAX_MESSAGES: %v", err)
+		logger.Fatal("AI_Service", "invalid NATS_PULL_MAX_MESSAGES: %v", err)
 	}
 
 	temperatureStr := os.Getenv("OPENAI_TEMPERATURE")
@@ -104,7 +103,7 @@ func main() {
 	}
 	temperature, err := strconv.ParseFloat(temperatureStr, 32)
 	if err != nil {
-		log.Fatalf("invalid OPENAI_TEMPERATURE: %v", err)
+		logger.Fatal("AI_Service", "invalid OPENAI_TEMPERATURE: %v", err)
 	}
 
 	maxTokensStr := os.Getenv("OPENAI_MAX_TOKENS")
@@ -113,7 +112,7 @@ func main() {
 	}
 	maxTokens, err := strconv.Atoi(maxTokensStr)
 	if err != nil {
-		log.Fatalf("invalid OPENAI_MAX_TOKENS: %v", err)
+		logger.Fatal("AI_Service", "invalid OPENAI_MAX_TOKENS: %v", err)
 	}
 
 	timeoutStr := os.Getenv("OPENAI_TIMEOUT_MINUTES")
@@ -122,7 +121,7 @@ func main() {
 	}
 	timeout, err := strconv.Atoi(timeoutStr)
 	if err != nil {
-		log.Fatalf("invalid OPENAI_TIMEOUT_MINUTES: %v", err)
+		logger.Fatal("AI_Service", "invalid OPENAI_TIMEOUT_MINUTES: %v", err)
 	}
 
 	// Initialize the AI Analyzer config
@@ -147,12 +146,12 @@ func main() {
 
 	analyzer, err := ai.NewAnalyzerFactory(config)
 	if err != nil {
-		log.Fatalf("failed to initialize AI analyzer: %v", err)
+		logger.Fatal("AI_Service", "failed to initialize AI analyzer: %v", err)
 	}
 
 	natsServer := server.NewNatsServer(nc, js, analyzer, workerPoolSize, queueFilter, maxAckPending, pullMaxMessages)
 
-	log.Printf("AI Engine: OpenAI Spec | Host: %s | Text Model: %s | Vision Model: %s", aiHost, aiTextModel, aiVisionModel)
+	logger.Info("AI_Service", "AI Engine: OpenAI Spec | Host: %s | Text Model: %s | Vision Model: %s", aiHost, aiTextModel, aiVisionModel)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -162,11 +161,11 @@ func main() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
-		log.Println("Shutting down AI service...")
+		logger.Info("AI_Service", "%v", "Shutting down AI service...")
 		cancel()
 	}()
 
 	if err := natsServer.Start(ctx); err != nil {
-		log.Fatalf("NATS server failed: %v", err)
+		logger.Fatal("AI_Service", "NATS server failed: %v", err)
 	}
 }

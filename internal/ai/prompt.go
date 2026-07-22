@@ -2,10 +2,10 @@ package ai
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	pb "github.com/AndrewK4758/shared_protos"
+	"github.com/AndrewK4758/shared_utils/logger"
 )
 
 func buildPrompt(req *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, documentContent string) string {
@@ -30,7 +30,7 @@ func buildPrompt(req *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition
 		if req.GlobalState != nil {
 			stateJson, err := req.GlobalState.MarshalJSON()
 			if err != nil {
-				log.Printf("failed to marshal global state: %v", err)
+				logger.Info("AI_Service", "failed to marshal global state: %v", err)
 			} else {
 				prompt += fmt.Sprintf("\nCurrent Global State:\n%s\n", string(stateJson))
 			}

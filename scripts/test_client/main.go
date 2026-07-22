@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
+	"github.com/AndrewK4758/shared_utils/logger"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -19,21 +19,21 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("Usage: go run main.go <path-to-document-or-directory>")
+		logger.Fatal("AI_Service", "%v", "Usage: go run main.go <path-to-document-or-directory>")
 	}
 	inputPath := os.Args[1]
 
 	// Determine if input is a single file or a directory
 	info, err := os.Stat(inputPath)
 	if err != nil {
-		log.Fatalf("Failed to stat input path: %v", err)
+		logger.Fatal("AI_Service", "Failed to stat input path: %v", err)
 	}
 
 	var filesToProcess []string
 	if info.IsDir() {
 		entries, err := os.ReadDir(inputPath)
 		if err != nil {
-			log.Fatalf("Failed to read directory: %v", err)
+			logger.Fatal("AI_Service", "Failed to read directory: %v", err)
 		}
 		for _, entry := range entries {
 			if !entry.IsDir() {
@@ -45,7 +45,7 @@ func main() {
 	}
 
 	if len(filesToProcess) == 0 {
-		log.Fatal("No files found to process")
+		logger.Fatal("AI_Service", "%v", "No files found to process")
 	}
 
 	fmt.Printf("Found %d file(s) to process.\n", len(filesToProcess))
@@ -53,7 +53,7 @@ func main() {
 	// Connect to our gRPC Server
 	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("did not connect: %v", err)
+		logger.Fatal("AI_Service", "did not connect: %v", err)
 	}
 	defer func(conn *grpc.ClientConn) {
 		err := conn.Close()
@@ -66,13 +66,13 @@ func main() {
 	// Connect to NATS JetStream to listen for the async responses
 	nc, err := nats.Connect(nats.DefaultURL)
 	if err != nil {
-		log.Fatalf("failed to connect to NATS: %v", err)
+		logger.Fatal("AI_Service", "failed to connect to NATS: %v", err)
 	}
 	defer nc.Close()
 
 	js, err := jetstream.New(nc)
 	if err != nil {
-		log.Fatalf("failed to init JetStream: %v", err)
+		logger.Fatal("AI_Service", "failed to init JetStream: %v", err)
 	}
 
 	appID := "test_client_app"
@@ -92,7 +92,7 @@ func main() {
 		DeliverPolicy: jetstream.DeliverNewPolicy,
 	})
 	if err != nil {
-		log.Fatalf("failed to create JetStream consumer: %v", err)
+		logger.Fatal("AI_Service", "failed to create JetStream consumer: %v", err)
 	}
 
 	// Setup a channel to block until we get all responses
@@ -106,7 +106,7 @@ func main() {
 		done <- msg.Data()
 	})
 	if err != nil {
-		log.Fatalf("failed to consume from JetStream: %v", err)
+		logger.Fatal("AI_Service", "failed to consume from JetStream: %v", err)
 	}
 	defer cc.Stop()
 
@@ -121,15 +121,15 @@ func main() {
 
 			fileBytes, err := os.ReadFile(path)
 			if err != nil {
-				log.Printf("Failed to read file %s: %v", path, err)
+				logger.Info("AI_Service", "Failed to read file %s: %v", path, err)
 				return
 			}
 			fileName := filepath.Base(path)
 
 			req := &pb.ProcessDocumentRequest{
-				FileContent:  fileBytes,
-				FileName:     fileName,
-				ModelChoice:  pb.ModelChoice_MODEL_CHOICE_EXTRACTION,
+				FileContent: fileBytes,
+				FileName:    fileName,
+				ModelChoice: pb.ModelChoice_MODEL_CHOICE_EXTRACTION,
 				Identity: &pb.InfrastructureIdentity{
 					AppId: appID,
 				},
@@ -147,28 +147,28 @@ func main() {
 
 			stream, err := client.ProcessDocument(ctx)
 			if err != nil {
-				log.Printf("gRPC stream init failed for %s: %v", fileName, err)
+				logger.Info("AI_Service", "gRPC stream init failed for %s: %v", fileName, err)
 				return
 			}
-			
+
 			if err := stream.Send(req); err != nil {
-				log.Printf("gRPC send failed for %s: %v", fileName, err)
+				logger.Info("AI_Service", "gRPC send failed for %s: %v", fileName, err)
 				return
 			}
-			
+
 			if err := stream.CloseSend(); err != nil {
-				log.Printf("gRPC closesend failed for %s: %v", fileName, err)
+				logger.Info("AI_Service", "gRPC closesend failed for %s: %v", fileName, err)
 				return
 			}
-			
+
 			res, err := stream.Recv()
 			if err != nil {
-				log.Printf("gRPC call failed for %s: %v", fileName, err)
+				logger.Info("AI_Service", "gRPC call failed for %s: %v", fileName, err)
 				return
 			}
 
 			if !res.GetSuccess() {
-				log.Printf("Dispatch Error for %s: %s", fileName, res.GetErrorMessage())
+				logger.Info("AI_Service", "Dispatch Error for %s: %s", fileName, res.GetErrorMessage())
 				return
 			}
 
@@ -192,7 +192,7 @@ func main() {
 			fmt.Printf("\n--- [%d/%d] Received Async NATS Response ---\n", receivedCount, len(filesToProcess))
 			fmt.Printf("%s\n", string(payload))
 		case <-timeout:
-			log.Fatalf("\nTimeout waiting for remaining NATS responses! (Received %d/%d)", receivedCount, len(filesToProcess))
+			logger.Fatal("AI_Service", "\nTimeout waiting for remaining NATS responses! (Received %d/%d)", receivedCount, len(filesToProcess))
 		}
 	}
 

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 	"ai_service/internal/ai"
 
 	"github.com/AndrewK4758/shared_utils/jsonclean"
+	"github.com/AndrewK4758/shared_utils/logger"
 
 	pb "github.com/AndrewK4758/shared_protos"
 )
@@ -51,7 +51,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create JetStream stream: %w", err)
 		}
-		log.Printf("Successfully created JetStream stream: %s", streamName)
+		logger.Info("AI_Service", "Successfully created JetStream stream: %s", streamName)
 	}
 
 	durableName := fmt.Sprintf("ai_service_workers_%s", s.queueFilter)
@@ -72,7 +72,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create JetStream consumer: %w", err)
 	}
 
-	log.Printf("Starting AI consumer with MaxAckPending=%d...", s.workerPoolSize)
+	logger.Info("AI_Service", "Starting AI consumer with MaxAckPending=%d...", s.workerPoolSize)
 	sem := make(chan struct{}, s.workerPoolSize)
 	cc, err := cons.Consume(func(msg jetstream.Msg) {
 		sem <- struct{}{}
@@ -93,7 +93,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	meta, err := msg.Metadata()
 	if err == nil && meta.NumDelivered > 5 {
-		log.Printf("Message exceeded max delivery attempts, terminating")
+		logger.Info("AI_Service", "Message exceeded max delivery attempts, terminating")
 		msg.Term()
 
 		replySubj := ""
@@ -115,7 +115,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 			select {
 			case <-ticker.C:
 				if err := msg.InProgress(); err != nil {
-					log.Printf("Failed to set msg in progress: %v", err)
+					logger.Info("AI_Service", "Failed to set msg in progress: %v", err)
 				}
 			case <-done:
 				return
@@ -126,7 +126,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	}()
 	// --- END of InProgress keep-alive loop ---
 
-	log.Printf("Received action request on subject: %s", msg.Subject())
+	logger.Info("AI_Service", "Received action request on subject: %s", msg.Subject())
 
 	var replySubj string
 	if headers := msg.Headers(); headers != nil {
@@ -135,7 +135,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	req := &pb.ExecuteWorkflowNodeRequest{}
 	if err := proto.Unmarshal(msg.Data(), req); err != nil {
-		log.Printf("Error unmarshaling request: %v", err)
+		logger.Info("AI_Service", "Error unmarshaling request: %v", err)
 		msg.Term()
 		s.sendErrorReply(ctx, replySubj, fmt.Sprintf("invalid payload: %v", err))
 		return
@@ -147,7 +147,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	result, err = s.analyzer.AnalyzeText(ctx, "", req, nil)
 
 	if err != nil {
-		log.Printf("AI analysis failed: %v", err)
+		logger.Info("AI_Service", "AI analysis failed: %v", err)
 		errStr := strings.ToLower(err.Error())
 
 		var attempts uint64 = 1
@@ -160,13 +160,13 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 		if isRateLimit {
 			backoffDelay := time.Duration(1<<attempts) * 5 * time.Second
-			log.Printf("Rate limited by provider, applying NakWithDelay of %v", backoffDelay)
+			logger.Info("AI_Service", "Rate limited by provider, applying NakWithDelay of %v", backoffDelay)
 			msg.NakWithDelay(backoffDelay)
 			return
 		}
 
 		if isTempError {
-			log.Printf("Temporary server error, applying NakWithDelay of 15s")
+			logger.Info("AI_Service", "Temporary server error, applying NakWithDelay of 15s")
 			msg.NakWithDelay(15 * time.Second)
 			return
 		}
@@ -185,23 +185,23 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	respBytes, err := proto.Marshal(resp)
 	if err != nil {
-		log.Printf("Failed to marshal response: %v", err)
+		logger.Info("AI_Service", "Failed to marshal response: %v", err)
 		msg.Term()
 		return
 	}
 
 	if replySubj != "" {
 		if _, err := s.js.Publish(ctx, replySubj, respBytes); err != nil {
-			log.Printf("Failed to publish reply to NATS %s: %v", replySubj, err)
+			logger.Info("AI_Service", "Failed to publish reply to NATS %s: %v", replySubj, err)
 			msg.NakWithDelay(5 * time.Second) // Retry if NATS publish fails
 			return
 		}
 	}
 
 	if err := msg.Ack(); err != nil {
-		log.Printf("Failed to ack msg: %v", err)
+		logger.Info("AI_Service", "Failed to ack msg: %v", err)
 	} else {
-		log.Printf("Successfully completed action and replied to %s", replySubj)
+		logger.Info("AI_Service", "Successfully completed action and replied to %s", replySubj)
 	}
 }
 

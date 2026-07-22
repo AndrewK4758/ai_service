@@ -3,12 +3,12 @@ package ai
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 
 	"cloud.google.com/go/vertexai/genai"
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
+	"github.com/AndrewK4758/shared_utils/logger"
 )
 
 type VertexAnalyzer struct {
@@ -52,7 +52,7 @@ func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 	}
 	model.ResponseMIMEType = "application/json"
 
-	log.Printf("[Ai Service] Sending Vertex AI request to model %s", v.textModel)
+	logger.Info("AI_Service", "[Ai Service] Sending Vertex AI request to model %s", v.textModel)
 
 	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
@@ -90,7 +90,7 @@ func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 		parts = append(parts, genai.ImageData("image/jpeg", b)) // Assume JPEG for now
 	}
 
-	log.Printf("[Ai Service] Sending Vertex AI Vision request to model %s", v.visionModel)
+	logger.Info("AI_Service", "[Ai Service] Sending Vertex AI Vision request to model %s", v.visionModel)
 
 	resp, err := model.GenerateContent(ctx, parts...)
 	if err != nil {

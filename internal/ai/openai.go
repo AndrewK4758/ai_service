@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
+	"github.com/AndrewK4758/shared_utils/logger"
 )
 
 type APIType string
@@ -38,10 +38,10 @@ type OpenAIConfig struct {
 
 func DefaultConfig(authToken string) OpenAIConfig {
 	return OpenAIConfig{
-		AuthToken:  authToken,
-		BaseURL:    "https://api.openai.com/v1",
-		APIType:    APITypeOpenAI,
-		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
+		AuthToken:   authToken,
+		BaseURL:     "https://api.openai.com/v1",
+		APIType:     APITypeOpenAI,
+		HTTPClient:  &http.Client{Timeout: 5 * time.Minute},
 		Temperature: 0.0,
 		MaxTokens:   4096,
 	}
@@ -100,7 +100,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 	}
 
 	url := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(o.config.BaseURL, "/"))
-	
+
 	// Create context using the HTTP client's timeout for safety, default to 5m if 0
 	timeout := o.config.HTTPClient.Timeout
 	if timeout == 0 {
@@ -114,14 +114,14 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	if o.config.APIType == APITypeAzure {
 		req.Header.Set("api-key", o.config.AuthToken)
 	} else {
 		req.Header.Set("Authorization", "Bearer "+o.config.AuthToken)
 	}
 
-	log.Printf("[Ai Service] Sending request to %s with model %s", url, reqBody.Model)
+	logger.Info("AI_Service", "[Ai Service] Sending request to %s with model %s", url, reqBody.Model)
 
 	resp, err := o.config.HTTPClient.Do(req)
 	if err != nil {
@@ -134,7 +134,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 		return "", fmt.Errorf("failed to read openai response body: %w", err)
 	}
 
-	log.Printf("[Ai Service] Received response status %d", resp.StatusCode)
+	logger.Info("AI_Service", "[Ai Service] Received response status %d", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("openai endpoint returned status %d: %s", resp.StatusCode, string(bodyBytes))
