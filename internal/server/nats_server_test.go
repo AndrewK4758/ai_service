@@ -78,7 +78,7 @@ func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 	analyzer := &mockAnalyzer{err: fmt.Errorf("429 Too Many Requests")}
 	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
 
-	req := &pb.ExecuteWorkflowNodeRequest{}
+	req := &pb.PerformActionRequest{}
 	data, _ := proto.Marshal(req)
 
 	msg := &mockMsg{
@@ -114,7 +114,7 @@ func TestNatsServer_processMessage_MaxRetries(t *testing.T) {
 	analyzer := &mockAnalyzer{err: fmt.Errorf("429 Too Many Requests")}
 	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
 
-	req := &pb.ExecuteWorkflowNodeRequest{}
+	req := &pb.PerformActionRequest{}
 	data, _ := proto.Marshal(req)
 
 	msg := &mockMsg{

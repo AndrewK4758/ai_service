@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,45 +44,48 @@ func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, 
 }
 
 func (s *NatsServer) Start(ctx context.Context) error {
-	streamName := "AI_ACTIONS"
-	_, err := s.js.Stream(ctx, streamName)
-	if err != nil {
-		_, err = s.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-			Name:     streamName,
-			Subjects: []string{"ai.action.>"},
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create JetStream stream: %w", err)
-		}
-		logger.Info("AI_Service", "Successfully created JetStream stream: %s", streamName)
-	}
+	streamName := "WORKERS"
 
 	durableName := fmt.Sprintf("ai_service_workers_%s", s.queueFilter)
-	filterSubject := fmt.Sprintf("ai.action.%s", s.queueFilter)
+	filterSubject := fmt.Sprintf("worker.ai.%s", s.queueFilter)
 	if s.queueFilter == ">" {
 		durableName = "ai_service_workers_all"
-		filterSubject = "ai.action.>"
+		filterSubject = "worker.ai.>"
 	}
 
-	cons, err := s.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
-		Durable:       durableName,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		FilterSubject: filterSubject,
-		MaxAckPending: s.maxAckPending,
-		AckWait:       1 * time.Minute,
-	})
+	var cons jetstream.Consumer
+	var err error
+	for i := 0; i < 30; i++ {
+		cons, err = s.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
+			Durable:        durableName,
+			AckPolicy:      jetstream.AckExplicitPolicy,
+			FilterSubjects: []string{filterSubject, "ai.action.>"},
+			MaxAckPending:  s.maxAckPending,
+			AckWait:        1 * time.Minute,
+		})
+		if err == nil {
+			break
+		}
+		logger.Info("AI_Service", "Waiting for stream %s to be created... (%v)", streamName, err)
+		time.Sleep(2 * time.Second)
+	}
 	if err != nil {
-		return fmt.Errorf("failed to create JetStream consumer: %w", err)
+		return fmt.Errorf("failed to create JetStream consumer after retries: %w", err)
 	}
 
 	logger.Info("AI_Service", "Starting AI consumer with MaxAckPending=%d...", s.workerPoolSize)
 	sem := make(chan struct{}, s.workerPoolSize)
 	cc, err := cons.Consume(func(msg jetstream.Msg) {
-		sem <- struct{}{}
-		go func(m jetstream.Msg) {
-			defer func() { <-sem }()
-			s.processMessage(ctx, m)
-		}(msg)
+		select {
+		case sem <- struct{}{}:
+			go func(m jetstream.Msg) {
+				defer func() { <-sem }()
+				s.processMessage(ctx, m)
+			}(msg)
+		case <-ctx.Done():
+			msg.Nak()
+			return
+		}
 	}, jetstream.PullMaxMessages(s.pullMaxMessages))
 	if err != nil {
 		return fmt.Errorf("failed to start consuming: %w", err)
@@ -94,13 +100,16 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	meta, err := msg.Metadata()
 	if err == nil && meta.NumDelivered > 5 {
 		logger.Info("AI_Service", "Message exceeded max delivery attempts, terminating")
-		msg.Term()
-
 		replySubj := ""
 		if headers := msg.Headers(); headers != nil {
 			replySubj = headers.Get("Reply-Subject")
 		}
-		s.sendErrorReply(ctx, replySubj, "Action failed after multiple retries due to rate limits.")
+		if err := s.sendErrorReply(ctx, replySubj, "Action failed after multiple retries due to rate limits."); err != nil {
+			logger.Info("AI_Service", "Failed to send error reply: %v", err)
+			msg.NakWithDelay(15 * time.Second)
+			return
+		}
+		msg.Term()
 		return
 	}
 	// --- START of InProgress keep-alive loop ---
@@ -136,15 +145,26 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	req := &pb.ExecuteWorkflowNodeRequest{}
 	if err := proto.Unmarshal(msg.Data(), req); err != nil {
 		logger.Info("AI_Service", "Error unmarshaling request: %v", err)
+		if err := s.sendErrorReply(ctx, replySubj, fmt.Sprintf("invalid payload: %v", err)); err != nil {
+			logger.Info("AI_Service", "Failed to send error reply: %v", err)
+			msg.NakWithDelay(15 * time.Second)
+			return
+		}
 		msg.Term()
-		s.sendErrorReply(ctx, replySubj, fmt.Sprintf("invalid payload: %v", err))
 		return
 	}
 
 	var result string
-	// Generic AI Worker acts strictly on the provided ExecuteWorkflowNodeRequest
-	// The client's global_state contains the context needed for analysis.
-	result, err = s.analyzer.AnalyzeText(ctx, "", req, nil)
+	var textToAnalyze string
+	if req.GetGlobalState() != nil {
+		stateBytes, err := json.Marshal(req.GetGlobalState().AsMap())
+		if err != nil {
+			logger.Info("AI_Service", "Failed to marshal global state: %v", err)
+		} else {
+			textToAnalyze = string(stateBytes)
+		}
+	}
+	result, err = s.analyzer.AnalyzeText(ctx, textToAnalyze, req, nil)
 
 	if err != nil {
 		logger.Info("AI_Service", "AI analysis failed: %v", err)
@@ -159,20 +179,34 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 		isTempError := strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "eof")
 
 		if isRateLimit {
-			backoffDelay := time.Duration(1<<attempts) * 5 * time.Second
+			natsRateLimitDelayStr := os.Getenv("NATS_RATE_LIMIT_DELAY")
+			natsRateLimitDelay, err := strconv.Atoi(natsRateLimitDelayStr)
+			if err != nil || natsRateLimitDelay <= 0 {
+				natsRateLimitDelay = 5
+			}
+			backoffDelay := time.Duration(1<<attempts) * time.Duration(natsRateLimitDelay) * time.Second
 			logger.Info("AI_Service", "Rate limited by provider, applying NakWithDelay of %v", backoffDelay)
 			msg.NakWithDelay(backoffDelay)
 			return
 		}
 
 		if isTempError {
-			logger.Info("AI_Service", "Temporary server error, applying NakWithDelay of 15s")
-			msg.NakWithDelay(15 * time.Second)
+			natsErrorTimeoutStr := os.Getenv("NATS_NACK_ERROR_TIMEOUT")
+			natsErrorTimeout, err := strconv.Atoi(natsErrorTimeoutStr)
+			if err != nil || natsErrorTimeout <= 0 {
+				natsErrorTimeout = 15
+			}
+			logger.Info("AI_Service", "Temporary server error, applying NakWithDelay of %ds", natsErrorTimeout)
+			msg.NakWithDelay(time.Duration(natsErrorTimeout) * time.Second)
 			return
 		}
 
+		if err := s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to perform action on payload: %v", err)); err != nil {
+			logger.Info("AI_Service", "Failed to send error reply: %v", err)
+			msg.NakWithDelay(15 * time.Second)
+			return
+		}
 		msg.Term()
-		s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to perform action on payload: %v", err))
 		return
 	}
 
@@ -191,9 +225,14 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	}
 
 	if replySubj != "" {
+		natsReplyDelayStr := os.Getenv("NATS_REPLY_DELAY")
+		natsReplyDelay, err := strconv.Atoi(natsReplyDelayStr)
+		if err != nil || natsReplyDelay <= 0 {
+			natsReplyDelay = 15
+		}
 		if _, err := s.js.Publish(ctx, replySubj, respBytes); err != nil {
 			logger.Info("AI_Service", "Failed to publish reply to NATS %s: %v", replySubj, err)
-			msg.NakWithDelay(5 * time.Second) // Retry if NATS publish fails
+			msg.NakWithDelay(time.Duration(natsReplyDelay) * time.Second) // Retry if NATS publish fails
 			return
 		}
 	}
@@ -205,14 +244,24 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	}
 }
 
-func (s *NatsServer) sendErrorReply(ctx context.Context, replySubject, errMsg string) {
+func (s *NatsServer) sendErrorReply(ctx context.Context, replySubject, errMsg string) error {
 	if replySubject == "" {
-		return
+		return nil
 	}
 	resp := &pb.PerformActionResponse{
-		Success:      false,
-		ErrorMessage: errMsg,
+		Success: false,
+		ErrorContract: &pb.ErrorContract{
+			Message: errMsg,
+			Source:  "ai_service",
+			Code:    "INTERNAL_ERROR",
+		},
 	}
-	respBytes, _ := proto.Marshal(resp)
-	_, _ = s.js.Publish(ctx, replySubject, respBytes)
+	respBytes, err := proto.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("failed to marshal error reply: %w", err)
+	}
+	if _, err := s.js.Publish(ctx, replySubject, respBytes); err != nil {
+		return fmt.Errorf("failed to publish error reply to NATS: %w", err)
+	}
+	return nil
 }
