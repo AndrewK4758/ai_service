@@ -31,6 +31,15 @@ type NatsServer struct {
 	pullMaxMessages int
 }
 
+func getMaxAckPending(defaultMax int) int {
+	if val := os.Getenv("MAX_ACK_PENDING"); val != "" {
+		if max, err := strconv.Atoi(val); err == nil && max > 0 {
+			return max
+		}
+	}
+	return defaultMax
+}
+
 func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, workerPoolSize int, queueFilter string, maxAckPending int, pullMaxMessages int) *NatsServer {
 	return &NatsServer{
 		nc:              nc,
@@ -60,7 +69,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 			Durable:        durableName,
 			AckPolicy:      jetstream.AckExplicitPolicy,
 			FilterSubjects: []string{filterSubject, "ai.action.>"},
-			MaxAckPending:  s.maxAckPending,
+			MaxAckPending:  getMaxAckPending(s.maxAckPending),
 			AckWait:        1 * time.Minute,
 		})
 		if err == nil {

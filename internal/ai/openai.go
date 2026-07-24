@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +17,15 @@ import (
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
 )
+
+func getInferenceTimeout() time.Duration {
+	if val := os.Getenv("OLLAMA_TIMEOUT_MINUTES"); val != "" {
+		if mins, err := strconv.Atoi(val); err == nil && mins > 0 {
+			return time.Duration(mins) * time.Minute
+		}
+	}
+	return 5 * time.Minute
+}
 
 type APIType string
 
@@ -41,7 +52,7 @@ func DefaultConfig(authToken string) OpenAIConfig {
 		AuthToken:   authToken,
 		BaseURL:     "https://api.openai.com/v1",
 		APIType:     APITypeOpenAI,
-		HTTPClient:  &http.Client{Timeout: 5 * time.Minute},
+		HTTPClient:  &http.Client{Timeout: getInferenceTimeout()},
 		Temperature: 0.0,
 		MaxTokens:   4096,
 	}
@@ -61,7 +72,7 @@ type OpenAIAnalyzer struct {
 
 func NewOpenAIAnalyzerWithConfig(config OpenAIConfig) *OpenAIAnalyzer {
 	if config.HTTPClient == nil {
-		config.HTTPClient = &http.Client{Timeout: 5 * time.Minute}
+		config.HTTPClient = &http.Client{Timeout: getInferenceTimeout()}
 	}
 	return &OpenAIAnalyzer{
 		config: config,
@@ -104,7 +115,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 	// Create context using the HTTP client's timeout for safety, default to 5m if 0
 	timeout := o.config.HTTPClient.Timeout
 	if timeout == 0 {
-		timeout = 5 * time.Minute
+		timeout = getInferenceTimeout()
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
