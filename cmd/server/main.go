@@ -21,9 +21,9 @@ import (
 )
 
 func main() {
-	logger.InitLogger()
 	// Attempt to load .env file (ignore if it doesn't exist)
 	envutil.LoadEnv(".env", "ai_service/.env", "../.env", "../../.env")
+	logger.InitLogger()
 
 	queueSizeStr := envutil.GetStringOrDefault("APP_QUEUE_SIZE", "")
 	if queueSizeStr == "" {
