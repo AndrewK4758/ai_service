@@ -1,6 +1,6 @@
 module ai_service
 
-go 1.23.0
+go 1.26.4
 
 require (
 	cloud.google.com/go/vertexai v0.19.0

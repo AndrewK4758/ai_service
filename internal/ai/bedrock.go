@@ -12,12 +12,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
+type BedrockRuntimeAPI interface {
+	Converse(ctx context.Context, params *bedrockruntime.ConverseInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error)
+}
+
 type BedrockAnalyzer struct {
 	textModel   string
 	visionModel string
 	temperature float32
 	maxTokens   int32
-	client      *bedrockruntime.Client
+	client      BedrockRuntimeAPI
 }
 
 func NewBedrockAnalyzer(aiConfig OpenAIConfig) (*BedrockAnalyzer, error) {
@@ -37,6 +41,16 @@ func NewBedrockAnalyzer(aiConfig OpenAIConfig) (*BedrockAnalyzer, error) {
 	}, nil
 }
 
+func NewBedrockAnalyzerWithClient(aiConfig OpenAIConfig, client BedrockRuntimeAPI) *BedrockAnalyzer {
+	return &BedrockAnalyzer{
+		textModel:   aiConfig.TextModel,
+		visionModel: aiConfig.VisionModel,
+		temperature: aiConfig.Temperature,
+		maxTokens:   int32(aiConfig.MaxTokens),
+		client:      client,
+	}
+}
+
 func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
 
@@ -47,9 +61,14 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflow
 		inferenceConfig.MaxTokens = &b.maxTokens
 	}
 
+	m := modelID
+	if m == "" {
+		m = b.textModel
+	}
+
 	// Bedrock Converse API
 	req := &bedrockruntime.ConverseInput{
-		ModelId: &b.textModel,
+		ModelId: &m,
 		Messages: []types.Message{
 			{
 				Role: types.ConversationRoleUser,
@@ -61,7 +80,7 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflow
 		InferenceConfig: inferenceConfig,
 	}
 
-	logger.Info("AI_Service", "[Ai Service] Sending Bedrock request to model %s", b.textModel)
+	logger.Info("AI_Service", "[Ai Service] Sending Bedrock request to model %s", m)
 	resp, err := b.client.Converse(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("bedrock inference failed: %w", err)
@@ -79,7 +98,7 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflow
 		return "", fmt.Errorf("bedrock returned non-text content")
 	}
 
-	return txt.Value, nil
+	return jsonclean.CleanJSON(txt.Value), nil
 }
 
 func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
@@ -107,8 +126,13 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 		inferenceConfig.MaxTokens = &b.maxTokens
 	}
 
+	m := modelID
+	if m == "" {
+		m = b.visionModel
+	}
+
 	req := &bedrockruntime.ConverseInput{
-		ModelId: &b.visionModel,
+		ModelId: &m,
 		Messages: []types.Message{
 			{
 				Role:    types.ConversationRoleUser,
@@ -118,7 +142,7 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 		InferenceConfig: inferenceConfig,
 	}
 
-	logger.Info("AI_Service", "[Ai Service] Sending Bedrock Vision request to model %s", b.visionModel)
+	logger.Info("AI_Service", "[Ai Service] Sending Bedrock Vision request to model %s", m)
 	resp, err := b.client.Converse(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("bedrock vision inference failed: %w", err)
@@ -137,4 +161,8 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 	}
 
 	return jsonclean.CleanJSON(txt.Value), nil
+}
+
+func (b *BedrockAnalyzer) GenerateEmbedding(ctx context.Context, text string, modelID string) ([]float32, error) {
+	return nil, fmt.Errorf("GenerateEmbedding not implemented for Bedrock")
 }

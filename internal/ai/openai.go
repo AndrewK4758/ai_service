@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/AndrewK4758/shared_utils/envutil"
 
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
@@ -19,7 +20,7 @@ import (
 )
 
 func getInferenceTimeout() time.Duration {
-	if val := os.Getenv("OLLAMA_TIMEOUT_MINUTES"); val != "" {
+	if val := envutil.GetStringOrDefault("OLLAMA_TIMEOUT_MINUTES", ""); val != "" {
 		if mins, err := strconv.Atoi(val); err == nil && mins > 0 {
 			return time.Duration(mins) * time.Minute
 		}
@@ -36,15 +37,21 @@ const (
 )
 
 type OpenAIConfig struct {
-	AuthToken   string
-	BaseURL     string
-	APIType     APIType
-	APIVersion  string
-	HTTPClient  *http.Client
-	TextModel   string
-	VisionModel string
-	Temperature float32
-	MaxTokens   int
+	AuthToken            string
+	BaseURL              string
+	APIType              APIType
+	APIVersion           string
+	HTTPClient           *http.Client
+	TextModel            string
+	VisionModel          string
+	EmbeddingModel       string
+	Temperature          float32
+	MaxTokens            int
+	AnthropicAPIKey      string
+	AnthropicBaseURL     string
+	AnthropicVersion     string
+	AnthropicTextModel   string
+	AnthropicVisionModel string
 }
 
 func DefaultConfig(authToken string) OpenAIConfig {
@@ -231,4 +238,81 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 	}
 
 	return o.callOpenAI(ctx, reqBody)
+}
+
+type openAIEmbeddingRequest struct {
+	Model string `json:"model"`
+	Input string `json:"input"`
+}
+
+type openAIEmbeddingResponse struct {
+	Data []struct {
+		Embedding []float32 `json:"embedding"`
+	} `json:"data"`
+}
+
+func (o *OpenAIAnalyzer) GenerateEmbedding(ctx context.Context, text string, modelID string) ([]float32, error) {
+	m := modelID
+	if m == "" {
+		m = o.config.EmbeddingModel
+	}
+	if m == "" {
+		m = envutil.GetEmbeddingModel("all-minilm:latest")
+	}
+
+	reqBody := openAIEmbeddingRequest{
+		Model: m,
+		Input: text,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal openai request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/embeddings", strings.TrimSuffix(o.config.BaseURL, "/"))
+
+	timeout := o.config.HTTPClient.Timeout
+	if timeout == 0 {
+		timeout = getInferenceTimeout()
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if o.config.APIType == APITypeAzure {
+		req.Header.Set("api-key", o.config.AuthToken)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+o.config.AuthToken)
+	}
+
+	resp, err := o.config.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("LLM embedding timed out or failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read openai response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openai endpoint returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var oaiResp openAIEmbeddingResponse
+	if err := json.Unmarshal(bodyBytes, &oaiResp); err != nil {
+		return nil, fmt.Errorf("failed to decode openai response: %w", err)
+	}
+
+	if len(oaiResp.Data) == 0 {
+		return nil, fmt.Errorf("openai endpoint returned no embeddings")
+	}
+
+	return oaiResp.Data[0].Embedding, nil
 }

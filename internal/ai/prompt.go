@@ -2,16 +2,17 @@ package ai
 
 import (
 	"fmt"
-	"os"
+
+	"github.com/AndrewK4758/shared_utils/envutil"
 
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/logger"
 )
 
 func buildPrompt(req *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, documentContent string) string {
-	basePrompt := os.Getenv("OPENAI_BASE_PROMPT")
+	basePrompt := envutil.GetStringOrDefault("OPENAI_BASE_PROMPT", "")
 	if basePrompt == "" {
-		basePrompt = os.Getenv("DEFAULT_BASE_PROMPT")
+		basePrompt = envutil.GetStringOrDefault("DEFAULT_BASE_PROMPT", "")
 	}
 	if basePrompt == "" {
 		basePrompt = "You are a strict AI assistant executing tasks for a business application. Your only goal is to handle the provided tasks exactly as described with 0 creativity. Do not hallucinate, explain, or add any unrequested information."

@@ -10,4 +10,5 @@ import (
 type Analyzer interface {
 	AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error)
 	AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error)
+	GenerateEmbedding(ctx context.Context, text string, modelID string) ([]float32, error)
 }

@@ -44,6 +44,18 @@ func TestNewAnalyzerFactory(t *testing.T) {
 			expectErr:  false,
 		},
 		{
+			name:       "ANTHROPIC",
+			provider:   "ANTHROPIC",
+			expectType: "*ai.AnthropicAnalyzer",
+			expectErr:  false,
+		},
+		{
+			name:       "CLAUDE",
+			provider:   "CLAUDE",
+			expectType: "*ai.AnthropicAnalyzer",
+			expectErr:  false,
+		},
+		{
 			name:       "Unknown Provider",
 			provider:   "UNKNOWN",
 			expectType: "",

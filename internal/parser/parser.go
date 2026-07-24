@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -46,7 +45,7 @@ type docxDocument struct {
 func ExtractDocxText(fileBytes []byte) (string, error) {
 	reader, err := zip.NewReader(bytes.NewReader(fileBytes), int64(len(fileBytes)))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create zip reader: %w", err)
 	}
 
 	var docXML io.ReadCloser
@@ -54,7 +53,7 @@ func ExtractDocxText(fileBytes []byte) (string, error) {
 		if f.Name == "word/document.xml" {
 			rc, err := f.Open()
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("failed to open word/document.xml: %w", err)
 			}
 			docXML = rc
 			break
@@ -62,7 +61,7 @@ func ExtractDocxText(fileBytes []byte) (string, error) {
 	}
 
 	if docXML == nil {
-		return "", errors.New("word/document.xml not found in docx")
+		return "", fmt.Errorf("word/document.xml not found in docx")
 	}
 	defer func(docXML io.ReadCloser) {
 		if err := docXML.Close(); err != nil {
@@ -73,7 +72,7 @@ func ExtractDocxText(fileBytes []byte) (string, error) {
 	var doc docxDocument
 	decoder := xml.NewDecoder(docXML)
 	if err := decoder.Decode(&doc); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to decode docx xml: %w", err)
 	}
 
 	var buf bytes.Buffer

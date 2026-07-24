@@ -82,6 +82,31 @@ To allow your engine to process multiple files simultaneously, you must configur
 
 ---
 
+## 🔀 Service Discovery & Dynamic Model Routing
+
+`ai_service` dynamically resolves physical LLM model IDs from incoming NATS JetStream subjects without any hardcoded task-to-model associations.
+
+### Subject Trailing Token Resolution
+When receiving a message on subjects matching `worker.>` (e.g., `worker.doc.chunking`, `worker.ai.inference`, `worker.custom.dept.doc-summary`):
+1. **Trailing Token Extraction**: The service extracts the final token of the NATS subject (e.g., `chunking`, `inference`, `doc-summary`).
+2. **POSIX Normalization**: Hyphens and non-alphanumeric characters are converted to underscores and uppercased (e.g., `doc-summary` -> `DOC_SUMMARY`).
+3. **Environment Lookup**: The service queries environment variable `MODEL_ROUTE_<UPPERCASE_TOKEN>` (e.g., `MODEL_ROUTE_CHUNKING`, `MODEL_ROUTE_INFERENCE`, `MODEL_ROUTE_DOC_SUMMARY`).
+
+### Fallback Hierarchy
+1. `MODEL_ROUTE_<UPPERCASE_TOKEN>` (Specific route variable)
+2. `MODEL_ROUTE_DEFAULT` (Default fallback route variable)
+3. Provider configuration default (`OPENAI_TEXT_MODEL` / `config.TextModel`)
+
+### Environment Configuration Example
+```env
+MODEL_ROUTE_CHUNKING=gemma4-extended
+MODEL_ROUTE_INFERENCE=gemma4:e4b-extended
+MODEL_ROUTE_EXTRACTION=gemma4:e4b-extended
+MODEL_ROUTE_DEFAULT=gemma4:e4b-extended
+```
+
+---
+
 ## 🧪 3. Testing the Parallel Pipeline
 
 You don't need a .NET app to verify the service works! The repository includes a pure Go test client that mimics an event-driven application.

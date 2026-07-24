@@ -9,22 +9,23 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/AndrewK4758/shared_utils/envutil"
+
 	"github.com/AndrewK4758/shared_utils/logger"
+	"github.com/AndrewK4758/shared_utils/natsutil"
 
 	"ai_service/internal/ai"
 	"ai_service/internal/server"
 
-	"github.com/joho/godotenv"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 func main() {
 	logger.InitLogger()
 	// Attempt to load .env file (ignore if it doesn't exist)
-	_ = godotenv.Load()
+	envutil.LoadEnv(".env", "ai_service/.env", "../.env", "../../.env")
 
-	queueSizeStr := os.Getenv("APP_QUEUE_SIZE")
+	queueSizeStr := envutil.GetStringOrDefault("APP_QUEUE_SIZE", "")
 	if queueSizeStr == "" {
 		queueSizeStr = "100"
 	}
@@ -33,7 +34,7 @@ func main() {
 		logger.Fatal("AI_Service", "invalid APP_QUEUE_SIZE: %v", err)
 	}
 
-	workerPoolSizeStr := os.Getenv("WORKER_POOL_SIZE")
+	workerPoolSizeStr := envutil.GetStringOrDefault("WORKER_POOL_SIZE", "")
 	if workerPoolSizeStr == "" {
 		workerPoolSizeStr = "5"
 	}
@@ -42,28 +43,25 @@ func main() {
 		logger.Fatal("AI_Service", "invalid WORKER_POOL_SIZE: %v", err)
 	}
 
-	aiHost := os.Getenv("OPENAI_BASE_URL")
+	aiHost := envutil.GetStringOrDefault("OPENAI_BASE_URL", "")
 	if aiHost == "" {
 		aiHost = "http://localhost:11434/v1" // default for local Ollama via OpenAI spec
 	}
 
 	// Configure the dual AI models
-	aiTextModel := os.Getenv("OPENAI_TEXT_MODEL")
-	if aiTextModel == "" {
-		aiTextModel = "llama3" // Standard model for DOCX/PDF
-	}
-
-	aiVisionModel := os.Getenv("OPENAI_VISION_MODEL")
-	if aiVisionModel == "" {
-		aiVisionModel = "glm-ocr" // Vision model for images
-	}
+	aiTextModel := envutil.GetStringOrDefault("OPENAI_TEXT_MODEL", "gemma4:e4b-extended")
+	aiVisionModel := envutil.GetStringOrDefault("OPENAI_VISION_MODEL", "glm-ocr")
+	aiEmbeddingModel := envutil.GetEmbeddingModel("all-minilm:latest")
+	chunkingRoute := envutil.GetStringOrDefault("MODEL_ROUTE_CHUNKING", "gemma4-extended")
+	inferenceRoute := envutil.GetStringOrDefault("MODEL_ROUTE_INFERENCE", "gemma4:e4b-extended")
+	extractionRoute := envutil.GetStringOrDefault("MODEL_ROUTE_EXTRACTION", "gemma4:34b-extended")
 
 	// Connect to NATS
-	natsURL := os.Getenv("NATS_URL")
+	natsURL := envutil.GetStringOrDefault("NATS_URL", "")
 	if natsURL == "" {
 		natsURL = "nats://127.0.0.1:4222"
 	}
-	nc, err := nats.Connect(natsURL)
+	nc, err := natsutil.ConnectWithRetries(natsURL, "AI_Service")
 	if err != nil {
 		logger.Fatal("AI_Service", "NATS connection is required for ai_service: %v", err)
 	}
@@ -74,21 +72,21 @@ func main() {
 		logger.Fatal("AI_Service", "failed to initialize JetStream: %v", err)
 	}
 
-	queueFilter := os.Getenv("QUEUE_MODEL_FILTER")
+	queueFilter := envutil.GetStringOrDefault("QUEUE_MODEL_FILTER", "")
 	if queueFilter == "" {
 		queueFilter = ">" // consume all by default
 	}
 
-	maxAckPendingStr := os.Getenv("NATS_MAX_ACK_PENDING")
+	maxAckPendingStr := envutil.GetStringOrDefault("NATS_MAX_ACK_PENDING", "")
 	if maxAckPendingStr == "" {
-		maxAckPendingStr = strconv.Itoa(workerPoolSize * 10)
+		maxAckPendingStr = strconv.Itoa(workerPoolSize)
 	}
 	maxAckPending, err := strconv.Atoi(maxAckPendingStr)
 	if err != nil {
 		logger.Fatal("AI_Service", "invalid NATS_MAX_ACK_PENDING: %v", err)
 	}
 
-	pullMaxMessagesStr := os.Getenv("NATS_PULL_MAX_MESSAGES")
+	pullMaxMessagesStr := envutil.GetStringOrDefault("NATS_PULL_MAX_MESSAGES", "")
 	if pullMaxMessagesStr == "" {
 		pullMaxMessagesStr = strconv.Itoa(workerPoolSize)
 	}
@@ -97,7 +95,7 @@ func main() {
 		logger.Fatal("AI_Service", "invalid NATS_PULL_MAX_MESSAGES: %v", err)
 	}
 
-	temperatureStr := os.Getenv("OPENAI_TEMPERATURE")
+	temperatureStr := envutil.GetStringOrDefault("OPENAI_TEMPERATURE", "")
 	if temperatureStr == "" {
 		temperatureStr = "0.0"
 	}
@@ -106,7 +104,7 @@ func main() {
 		logger.Fatal("AI_Service", "invalid OPENAI_TEMPERATURE: %v", err)
 	}
 
-	maxTokensStr := os.Getenv("OPENAI_MAX_TOKENS")
+	maxTokensStr := envutil.GetStringOrDefault("OPENAI_MAX_TOKENS", "")
 	if maxTokensStr == "" {
 		maxTokensStr = "4096"
 	}
@@ -115,7 +113,7 @@ func main() {
 		logger.Fatal("AI_Service", "invalid OPENAI_MAX_TOKENS: %v", err)
 	}
 
-	timeoutStr := os.Getenv("OPENAI_TIMEOUT_MINUTES")
+	timeoutStr := envutil.GetStringOrDefault("OPENAI_TIMEOUT_MINUTES", "")
 	if timeoutStr == "" {
 		timeoutStr = "5"
 	}
@@ -129,17 +127,24 @@ func main() {
 	config.BaseURL = aiHost
 	config.TextModel = aiTextModel
 	config.VisionModel = aiVisionModel
+	config.EmbeddingModel = aiEmbeddingModel
 	config.Temperature = float32(temperature)
 	config.MaxTokens = maxTokens
 	config.HTTPClient = &http.Client{
 		Timeout: time.Duration(timeout) * time.Minute,
 	}
 
-	apiType := os.Getenv("OPENAI_API_TYPE")
+	config.AnthropicAPIKey = envutil.GetStringOrDefault("ANTHROPIC_API_KEY", "")
+	config.AnthropicBaseURL = envutil.GetStringOrDefault("ANTHROPIC_BASE_URL", "")
+	config.AnthropicVersion = envutil.GetStringOrDefault("ANTHROPIC_VERSION", "")
+	config.AnthropicTextModel = envutil.GetStringOrDefault("ANTHROPIC_TEXT_MODEL", "")
+	config.AnthropicVisionModel = envutil.GetStringOrDefault("ANTHROPIC_VISION_MODEL", "")
+
+	apiType := envutil.GetStringOrDefault("OPENAI_API_TYPE", "")
 	if apiType != "" {
 		config.APIType = ai.APIType(apiType)
 	}
-	authToken := os.Getenv("OPENAI_AUTH_TOKEN")
+	authToken := envutil.GetStringOrDefault("OPENAI_AUTH_TOKEN", "")
 	if authToken != "" {
 		config.AuthToken = authToken
 	}
@@ -151,7 +156,7 @@ func main() {
 
 	natsServer := server.NewNatsServer(nc, js, analyzer, workerPoolSize, queueFilter, maxAckPending, pullMaxMessages)
 
-	logger.Info("AI_Service", "AI Engine: OpenAI Spec | Host: %s | Text Model: %s | Vision Model: %s", aiHost, aiTextModel, aiVisionModel)
+	logger.Info("AI_Service", "AI Engine: OpenAI Spec | Host: %s | Text: %s | Vision: %s | Embed: %s | Chunking: %s | Inference: %s | Extraction: %s", aiHost, aiTextModel, aiVisionModel, aiEmbeddingModel, chunkingRoute, inferenceRoute, extractionRoute)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

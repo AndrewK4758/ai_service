@@ -3,7 +3,8 @@ package ai
 import (
 	"context"
 	"fmt"
-	"os"
+
+	"github.com/AndrewK4758/shared_utils/envutil"
 
 	"cloud.google.com/go/vertexai/genai"
 	pb "github.com/AndrewK4758/shared_protos"
@@ -20,8 +21,8 @@ type VertexAnalyzer struct {
 }
 
 func NewVertexAnalyzer(config OpenAIConfig) (*VertexAnalyzer, error) {
-	projectID := os.Getenv("VERTEX_PROJECT_ID")
-	location := os.Getenv("VERTEX_LOCATION")
+	projectID := envutil.GetStringOrDefault("VERTEX_PROJECT_ID", "")
+	location := envutil.GetStringOrDefault("VERTEX_LOCATION", "")
 
 	if projectID == "" || location == "" {
 		return nil, fmt.Errorf("VERTEX_PROJECT_ID and VERTEX_LOCATION must be set")
@@ -45,14 +46,19 @@ func NewVertexAnalyzer(config OpenAIConfig) (*VertexAnalyzer, error) {
 func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
 
-	model := v.client.GenerativeModel(v.textModel)
+	m := modelID
+	if m == "" {
+		m = v.textModel
+	}
+
+	model := v.client.GenerativeModel(m)
 	model.SetTemperature(v.temperature)
 	if v.maxTokens > 0 {
 		model.SetMaxOutputTokens(int32(v.maxTokens))
 	}
 	model.ResponseMIMEType = "application/json"
 
-	logger.Info("AI_Service", "[Ai Service] Sending Vertex AI request to model %s", v.textModel)
+	logger.Info("AI_Service", "[Ai Service] Sending Vertex AI request to model %s", m)
 
 	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
@@ -77,7 +83,12 @@ func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 		prompt = buildPrompt(workflowCtx, action, "")
 	}
 
-	model := v.client.GenerativeModel(v.visionModel)
+	m := modelID
+	if m == "" {
+		m = v.visionModel
+	}
+
+	model := v.client.GenerativeModel(m)
 	model.SetTemperature(v.temperature)
 	if v.maxTokens > 0 {
 		model.SetMaxOutputTokens(int32(v.maxTokens))
@@ -90,7 +101,7 @@ func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 		parts = append(parts, genai.ImageData("image/jpeg", b)) // Assume JPEG for now
 	}
 
-	logger.Info("AI_Service", "[Ai Service] Sending Vertex AI Vision request to model %s", v.visionModel)
+	logger.Info("AI_Service", "[Ai Service] Sending Vertex AI Vision request to model %s", m)
 
 	resp, err := model.GenerateContent(ctx, parts...)
 	if err != nil {
@@ -107,4 +118,8 @@ func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 	}
 
 	return "", fmt.Errorf("unexpected part type from vertex")
+}
+
+func (v *VertexAnalyzer) GenerateEmbedding(ctx context.Context, text string, modelID string) ([]float32, error) {
+	return nil, fmt.Errorf("GenerateEmbedding not implemented for Vertex")
 }
