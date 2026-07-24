@@ -271,6 +271,7 @@ func (o *OpenAIAnalyzer) GenerateEmbedding(ctx context.Context, text string, mod
 	}
 
 	url := fmt.Sprintf("%s/embeddings", strings.TrimSuffix(o.config.BaseURL, "/"))
+	logger.Info("AI_Service", "Generating embedding. Path: %s, Model: %s", url, m)
 
 	timeout := o.config.HTTPClient.Timeout
 	if timeout == 0 {
