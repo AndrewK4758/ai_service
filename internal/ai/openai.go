@@ -165,11 +165,16 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 	return response, nil
 }
 
-func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition) (string, error) {
+func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
 
+	m := modelID
+	if m == "" {
+		m = o.config.TextModel
+	}
+
 	reqBody := openAIRequest{
-		Model: o.config.TextModel,
+		Model: m,
 		Messages: []openAIMessage{
 			{
 				Role:    "user",
@@ -186,7 +191,7 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 	return o.callOpenAI(ctx, reqBody)
 }
 
-func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition) (string, error) {
+func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, "(See attached image(s))")
 
 	var contentArray []map[string]any
@@ -205,8 +210,13 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 		})
 	}
 
+	m := modelID
+	if m == "" {
+		m = o.config.VisionModel
+	}
+
 	reqBody := openAIRequest{
-		Model: o.config.VisionModel,
+		Model: m,
 		Messages: []openAIMessage{
 			{
 				Role:    "user",

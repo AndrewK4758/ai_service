@@ -37,7 +37,7 @@ func NewBedrockAnalyzer(aiConfig OpenAIConfig) (*BedrockAnalyzer, error) {
 	}, nil
 }
 
-func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition) (string, error) {
+func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
 
 	inferenceConfig := &types.InferenceConfiguration{
@@ -82,7 +82,7 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflow
 	return txt.Value, nil
 }
 
-func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition) (string, error) {
+func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := "Please extract the text from this image as JSON."
 	if action != nil && workflowCtx != nil {
 		prompt = buildPrompt(workflowCtx, action, "")

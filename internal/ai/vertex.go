@@ -42,7 +42,7 @@ func NewVertexAnalyzer(config OpenAIConfig) (*VertexAnalyzer, error) {
 	}, nil
 }
 
-func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition) (string, error) {
+func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
 
 	model := v.client.GenerativeModel(v.textModel)
@@ -71,7 +71,7 @@ func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 	return "", fmt.Errorf("unexpected part type from vertex")
 }
 
-func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition) (string, error) {
+func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := "Please extract the text from this image as JSON."
 	if action != nil && workflowCtx != nil {
 		prompt = buildPrompt(workflowCtx, action, "")

@@ -173,7 +173,9 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 			textToAnalyze = string(stateBytes)
 		}
 	}
-	result, err = s.analyzer.AnalyzeText(ctx, textToAnalyze, req, nil)
+	
+	modelID := s.resolveModelID(msg.Subject())
+	result, err = s.analyzer.AnalyzeText(ctx, textToAnalyze, req, nil, modelID)
 
 	if err != nil {
 		logger.Info("AI_Service", "AI analysis failed: %v", err)
@@ -273,4 +275,28 @@ func (s *NatsServer) sendErrorReply(ctx context.Context, replySubject, errMsg st
 		return fmt.Errorf("failed to publish error reply to NATS: %w", err)
 	}
 	return nil
+}
+
+func (s *NatsServer) resolveModelID(subject string) string {
+	parts := strings.Split(subject, ".")
+	
+	var routingKey string
+	if len(parts) >= 3 && parts[0] == "worker" {
+		routingKey = parts[2]
+	} else if len(parts) >= 3 && parts[0] == "ai" && parts[1] == "action" {
+		routingKey = parts[2]
+	}
+
+	if routingKey != "" {
+		envKey := fmt.Sprintf("MODEL_ROUTE_%s", strings.ToUpper(routingKey))
+		if val := os.Getenv(envKey); val != "" {
+			return val
+		}
+	}
+	
+	if val := os.Getenv("MODEL_ROUTE_DEFAULT"); val != "" {
+		return val
+	}
+	
+	return ""
 }

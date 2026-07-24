@@ -88,7 +88,7 @@ func TestOpenAIAnalyzer_AnalyzeText(t *testing.T) {
 
 			ctx := context.Background()
 			action := &pb.ActionDefinition{Name: "test"}
-			got, err := analyzer.AnalyzeText(ctx, tt.text, nil, action)
+			got, err := analyzer.AnalyzeText(ctx, tt.text, nil, action, "test-text-model")
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("OpenAIAnalyzer.AnalyzeText() error = %v, wantErr %v", err, tt.wantErr)
@@ -127,7 +127,7 @@ func TestOpenAIAnalyzer_AnalyzeImage(t *testing.T) {
 	config.VisionModel = "test-vision-model"
 	analyzer := NewOpenAIAnalyzerWithConfig(config)
 
-	got, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fakeimage")}, nil, nil)
+	got, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fakeimage")}, nil, nil, "test-vision-model")
 	if err != nil {
 		t.Errorf("OpenAIAnalyzer.AnalyzeImage() unexpected error = %v", err)
 	}
