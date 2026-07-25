@@ -82,6 +82,15 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		maxAck = s.workerPoolSize
 	}
 
+	maxDeliver := 5
+	if envVal := envutil.GetStringOrDefault("NATS_MAX_DELIVER", ""); envVal != "" {
+		if parsed, err := strconv.Atoi(envVal); err == nil && parsed > 0 {
+			maxDeliver = parsed
+		} else if err != nil {
+			return fmt.Errorf("failed to parse NATS_MAX_DELIVER: %w", err)
+		}
+	}
+
 	var cons jetstream.Consumer
 	for i := 0; i < 90; i++ {
 		cons, err = s.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
@@ -90,6 +99,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 			FilterSubjects: []string{filterSubject, "ai.action.>"},
 			MaxAckPending:  maxAck,
 			AckWait:        ackWait,
+			MaxDeliver:     maxDeliver,
 		})
 		if err == nil {
 			break
