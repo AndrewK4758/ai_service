@@ -2,15 +2,11 @@ package ai
 
 import (
 	"fmt"
-
 	"github.com/AndrewK4758/shared_utils/envutil"
 )
 
 func NewAnalyzerFactory(config OpenAIConfig) (Analyzer, error) {
-	provider := envutil.GetStringOrDefault("AI_PROVIDER", "")
-	if provider == "" {
-		provider = "OPENAI" // Default
-	}
+	provider := envutil.MustGetString("AI_PROVIDER")
 
 	switch provider {
 	case "OPENAI", "LOCAL":

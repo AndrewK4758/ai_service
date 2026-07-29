@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	pb "github.com/AndrewK4758/shared_protos"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
@@ -50,10 +51,11 @@ func TestBedrockAnalyzer_AnalyzeText(t *testing.T) {
 	analyzer := NewBedrockAnalyzerWithClient(config, mockClient)
 	ctx := context.Background()
 	req := &pb.ExecuteWorkflowNodeRequest{}
+	parser := workflowparser.NewNodeRequestParser(req)
 	action := &pb.ActionDefinition{Name: "bedrock_action"}
 
 	// Test 1: Default text model
-	res, err := analyzer.AnalyzeText(ctx, "sample input text", req, action, "")
+	res, err := analyzer.AnalyzeText(ctx, "sample input text", parser, action, "")
 	if err != nil {
 		t.Fatalf("AnalyzeText failed: %v", err)
 	}
@@ -70,7 +72,7 @@ func TestBedrockAnalyzer_AnalyzeText(t *testing.T) {
 
 	// Test 2: Dynamic model override
 	overrideModel := "us.meta.llama3-3-70b-instruct-v1:0"
-	_, err = analyzer.AnalyzeText(ctx, "sample text", req, action, overrideModel)
+	_, err = analyzer.AnalyzeText(ctx, "sample text", parser, action, overrideModel)
 	if err != nil {
 		t.Fatalf("AnalyzeText with model override failed: %v", err)
 	}
@@ -104,11 +106,12 @@ func TestBedrockAnalyzer_AnalyzeImage(t *testing.T) {
 	analyzer := NewBedrockAnalyzerWithClient(config, mockClient)
 	ctx := context.Background()
 	req := &pb.ExecuteWorkflowNodeRequest{}
+	parser := workflowparser.NewNodeRequestParser(req)
 	action := &pb.ActionDefinition{Name: "bedrock_vision"}
 	images := [][]byte{[]byte("fake-image-bytes")}
 
 	// Test vision analysis
-	res, err := analyzer.AnalyzeImage(ctx, images, req, action, "")
+	res, err := analyzer.AnalyzeImage(ctx, images, parser, action, "")
 	if err != nil {
 		t.Fatalf("AnalyzeImage failed: %v", err)
 	}
@@ -122,7 +125,7 @@ func TestBedrockAnalyzer_AnalyzeImage(t *testing.T) {
 
 	// Test vision with dynamic model override
 	overrideVisionModel := "amazon.titan-embed-text-v2:0"
-	_, err = analyzer.AnalyzeImage(ctx, images, req, action, overrideVisionModel)
+	_, err = analyzer.AnalyzeImage(ctx, images, parser, action, overrideVisionModel)
 	if err != nil {
 		t.Fatalf("AnalyzeImage with override failed: %v", err)
 	}

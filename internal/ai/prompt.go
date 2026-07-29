@@ -7,34 +7,34 @@ import (
 
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/logger"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 )
 
-func buildPrompt(req *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, documentContent string) string {
-	basePrompt := envutil.GetStringOrDefault("OPENAI_BASE_PROMPT", "")
-	if basePrompt == "" {
-		basePrompt = envutil.GetStringOrDefault("DEFAULT_BASE_PROMPT", "")
-	}
-	if basePrompt == "" {
-		basePrompt = "You are a strict AI assistant executing tasks for a business application. Your only goal is to handle the provided tasks exactly as described with 0 creativity. Do not hallucinate, explain, or add any unrequested information."
-	}
-	prompt := basePrompt + "\n"
+func buildPrompt(parser *workflowparser.NodeRequestParser, action *pb.ActionDefinition, documentContent string) string {
+	basePrompt := envutil.MustGetString("OPENAI_BASE_PROMPT")
 
-	if req != nil {
-		if req.NodeConfig != nil && req.NodeConfig.SystemInstructions != "" {
-			prompt += fmt.Sprintf("\nGlobal Job Instructions:\n%s\n", req.NodeConfig.SystemInstructions)
+	prompt := ""
+	if basePrompt != "" {
+		prompt = basePrompt + "\n"
+	}
+
+	if parser != nil {
+		sysInstr := parser.GetSystemInstructions()
+		if sysInstr != "" {
+			prompt += fmt.Sprintf("\nGlobal Job Instructions:\n%s\n", sysInstr)
 		}
 
-		if req.NodeConfig != nil && req.NodeConfig.ExpectedSchema != "" {
-			prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", req.NodeConfig.ExpectedSchema)
+		schema := parser.GetExpectedSchema()
+		if schema != "" {
+			prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", schema)
 		}
 
-		if req.GlobalState != nil {
-			stateJson, err := req.GlobalState.MarshalJSON()
-			if err != nil {
-				logger.Info("AI_Service", "failed to marshal global state: %v", err)
-			} else {
-				prompt += fmt.Sprintf("\nCurrent Global State:\n%s\n", string(stateJson))
-			}
+		inputData, err := parser.GetInferenceInputData()
+		if err != nil {
+			logger.Info("AI_Service", "Could not extract inference input data: %v", err)
+		} else if inputData != "" {
+			inputKey := parser.GetInferenceInputKey()
+			prompt += fmt.Sprintf("\nInput Data (%s):\n%s\n", inputKey, inputData)
 		}
 	}
 
@@ -47,6 +47,8 @@ func buildPrompt(req *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition
 		}
 	}
 
-	prompt += "\nDocument Content / Input:\n" + documentContent
+	if documentContent != "" {
+		prompt += "\nDocument Content / Input:\n" + documentContent
+	}
 	return prompt
 }

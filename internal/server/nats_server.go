@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -20,6 +19,7 @@ import (
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
 	"github.com/AndrewK4758/shared_utils/natsutil"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 
 	pb "github.com/AndrewK4758/shared_protos"
 )
@@ -34,19 +34,7 @@ type NatsServer struct {
 	pullMaxMessages int
 }
 
-func getMaxAckPending(defaultMax int) int {
-	if val := envutil.GetStringOrDefault("MAX_ACK_PENDING", ""); val != "" {
-		if max, err := strconv.Atoi(val); err == nil && max > 0 {
-			return max
-		}
-	}
-	if val := envutil.GetStringOrDefault("NATS_MAX_ACK_PENDING", ""); val != "" {
-		if max, err := strconv.Atoi(val); err == nil && max > 0 {
-			return max
-		}
-	}
-	return defaultMax
-}
+
 
 func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, workerPoolSize int, queueFilter string, maxAckPending int, pullMaxMessages int) *NatsServer {
 	return &NatsServer{
@@ -70,29 +58,20 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		filterSubject = "worker.ai.>"
 	}
 
-	ackWaitStr := envutil.GetStringOrDefault("WORKER_ACK_WAIT", "1m")
+	ackWaitStr := envutil.MustGetString("WORKER_ACK_WAIT")
 	ackWait, err := time.ParseDuration(ackWaitStr)
 	if err != nil {
 		logger.Warn("AI_Service", "Invalid WORKER_ACK_WAIT, defaulting to 1m: %v", err)
 		ackWait = 1 * time.Minute
 	}
 
-	maxAck := getMaxAckPending(s.maxAckPending)
-	if maxAck <= 0 {
-		maxAck = s.workerPoolSize
-	}
-
-	maxDeliver := 5
-	if envVal := envutil.GetStringOrDefault("NATS_MAX_DELIVER", ""); envVal != "" {
-		if parsed, err := strconv.Atoi(envVal); err == nil && parsed > 0 {
-			maxDeliver = parsed
-		} else if err != nil {
-			return fmt.Errorf("failed to parse NATS_MAX_DELIVER: %w", err)
-		}
-	}
+	maxAck := envutil.MustGetInt("MAX_ACK_PENDING")
+	maxDeliver := envutil.MustGetInt("NATS_MAX_DELIVER")
+	retryCount := envutil.MustGetInt("NATS_CONSUMER_RETRY_COUNT")
+	retrySleepSec := envutil.MustGetInt("NATS_CONSUMER_RETRY_SLEEP_SEC")
 
 	var cons jetstream.Consumer
-	for i := 0; i < 90; i++ {
+	for range retryCount {
 		cons, err = s.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
 			Durable:        durableName,
 			AckPolicy:      jetstream.AckExplicitPolicy,
@@ -105,7 +84,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 			break
 		}
 		logger.Info("AI_Service", "Waiting for stream %s to be created... (%v)", streamName, err)
-		time.Sleep(2 * time.Second)
+		time.Sleep(time.Duration(retrySleepSec) * time.Second)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to create JetStream consumer after retries: %w", err)
@@ -207,7 +186,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	}
 
 	// --- START of InProgress keep-alive loop ---
-	ackWaitStr := envutil.GetStringOrDefault("WORKER_ACK_WAIT", "1m")
+	ackWaitStr := envutil.MustGetString("WORKER_ACK_WAIT")
 	ackWait, err := time.ParseDuration(ackWaitStr)
 	if err != nil {
 		ackWait = 1 * time.Minute
@@ -275,23 +254,16 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 		return
 	}
 
-	if req.Identity != nil {
-		t, a, j = natsutil.ExtractIdentity(req.Identity)
-	}
+	parser := workflowparser.NewNodeRequestParser(req)
+	t, a, j = parser.ExtractIdentity()
 
 	var result string
 	var textToAnalyze string
-	if req.GetGlobalState() != nil {
-		stateBytes, err := json.Marshal(req.GetGlobalState().AsMap())
-		if err != nil {
-			logger.Info("AI_Service", "Failed to marshal global state: %v", err)
-		} else {
-			textToAnalyze = string(stateBytes)
-		}
-	}
+	// textToAnalyze is intentionally left blank here because prompt.go already injects req.GlobalState.
+	// We only use textToAnalyze if we need to pass a specific distinct document (e.g. OCR text).
 
 	modelID := s.resolveModelID(msg.Subject())
-	result, err = s.analyzer.AnalyzeText(ctx, textToAnalyze, req, nil, modelID)
+	result, err = s.analyzer.AnalyzeText(ctx, textToAnalyze, parser, nil, modelID)
 
 	if err != nil {
 		if ctx.Err() != nil {
@@ -319,7 +291,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 		isTempError := strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "eof")
 
 		if isRateLimit {
-			natsRateLimitDelayStr := envutil.GetStringOrDefault("NATS_RATE_LIMIT_DELAY", "")
+			natsRateLimitDelayStr := envutil.MustGetString("NATS_RATE_LIMIT_DELAY")
 			natsRateLimitDelay, errParse := strconv.Atoi(natsRateLimitDelayStr)
 			if errParse != nil || natsRateLimitDelay <= 0 {
 				natsRateLimitDelay = 5
@@ -344,7 +316,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 		}
 
 		if isTempError {
-			natsErrorTimeoutStr := envutil.GetStringOrDefault("NATS_NACK_ERROR_TIMEOUT", "")
+			natsErrorTimeoutStr := envutil.MustGetString("NATS_NACK_ERROR_TIMEOUT")
 			natsErrorTimeout, errParse := strconv.Atoi(natsErrorTimeoutStr)
 			if errParse != nil || natsErrorTimeout <= 0 {
 				natsErrorTimeout = 15
@@ -388,6 +360,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	}
 
 	result = jsonclean.CleanJSON(result)
+	logger.Info("AI_Service", "AI Output for Job %s:\n%s", j, result)
 
 	resp := &pb.PerformActionResponse{
 		Success:          true,
@@ -415,15 +388,12 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	}
 
 	if replySubj != "" {
-		natsReplyDelayStr := envutil.GetStringOrDefault("NATS_REPLY_DELAY", "")
+		natsReplyDelayStr := envutil.MustGetString("NATS_REPLY_DELAY")
 		natsReplyDelay, errParse := strconv.Atoi(natsReplyDelayStr)
 		if errParse != nil || natsReplyDelay <= 0 {
 			natsReplyDelay = 15
 		}
-		replyStream := "AI_RESPONSES"
-		if strings.HasPrefix(replySubj, "orchestrator.response") {
-			replyStream = "ORCHESTRATOR_RESPONSES"
-		}
+		replyStream := envutil.MustGetString("NATS_RESPONSE_STREAM")
 		_, pubErr := s.js.Publish(ctx, replySubj, respBytes)
 		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
 			Component: "AI_Service",
@@ -476,16 +446,21 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	}
 }
 
-func (s *NatsServer) sendErrorReply(ctx context.Context, replySubject, errMsg string) error {
+func (s *NatsServer) sendErrorReply(ctx context.Context, replySubject, errMsg string, opts ...string) error {
 	if replySubject == "" {
 		return nil
+	}
+	source := envutil.MustGetString("SERVICE_NAME")
+	code := "INTERNAL_ERROR"
+	if len(opts) > 0 && opts[0] != "" {
+		code = opts[0]
 	}
 	resp := &pb.PerformActionResponse{
 		Success: false,
 		ErrorContract: &pb.ErrorContract{
 			Message: errMsg,
-			Source:  "ai_service",
-			Code:    "INTERNAL_ERROR",
+			Source:  source,
+			Code:    code,
 		},
 	}
 	respBytes, err := proto.Marshal(resp)
@@ -503,7 +478,7 @@ var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 func (s *NatsServer) resolveModelID(subject string) string {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		return envutil.GetStringOrDefault("MODEL_ROUTE_DEFAULT", "")
+		return envutil.MustGetString("MODEL_ROUTE_DEFAULT")
 	}
 
 	parts := strings.Split(subject, ".")
@@ -519,24 +494,14 @@ func (s *NatsServer) resolveModelID(subject string) string {
 	if trailingToken != "" {
 		sanitized := nonAlphanumericRegex.ReplaceAllString(trailingToken, "_")
 		upperToken := strings.ToUpper(sanitized)
-		envKey := fmt.Sprintf("MODEL_ROUTE_%s", upperToken)
-		if val := envutil.GetStringOrDefault(envKey, ""); val != "" {
-			return val
-		}
+		
 		if upperToken == "EMBEDDING" || upperToken == "EMBED" {
-			if val := envutil.GetEmbeddingModel(""); val != "" {
-				return val
-			}
+			return envutil.GetEmbeddingModel()
 		}
-		envKeyDirect := fmt.Sprintf("MODEL_%s", upperToken)
-		if val := envutil.GetStringOrDefault(envKeyDirect, ""); val != "" {
-			return val
-		}
+
+		envKey := fmt.Sprintf("MODEL_ROUTE_%s", upperToken)
+		return envutil.MustGetString(envKey)
 	}
 
-	if val := envutil.GetStringOrDefault("MODEL_ROUTE_DEFAULT", ""); val != "" {
-		return val
-	}
-
-	return ""
+	return envutil.MustGetString("MODEL_ROUTE_DEFAULT")
 }

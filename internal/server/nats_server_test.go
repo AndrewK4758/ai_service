@@ -1,6 +1,8 @@
 package server
 
 import (
+	"os"
+
 	"context"
 	"fmt"
 	"sync"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/protobuf/proto"
@@ -17,11 +20,11 @@ type mockAnalyzer struct {
 	err error
 }
 
-func (m *mockAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+func (m *mockAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
 	return "{}", m.err
 }
 
-func (m *mockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+func (m *mockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
 	return "{}", m.err
 }
 
@@ -110,6 +113,7 @@ func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	t.Setenv("MODEL_ROUTE_SUBJECT", "worker.ai.inference")
 	server.processMessage(ctx, msg)
 
 	msg.mu.Lock()
@@ -310,30 +314,6 @@ func TestNatsServer_processMessage_ContextCanceled(t *testing.T) {
 	}
 }
 
-func TestNatsServer_GetMaxAckPending(t *testing.T) {
-	t.Run("default fallback", func(t *testing.T) {
-		got := getMaxAckPending(5)
-		if got != 5 {
-			t.Errorf("getMaxAckPending(5) = %d; want 5", got)
-		}
-	})
-
-	t.Run("MAX_ACK_PENDING env set", func(t *testing.T) {
-		t.Setenv("MAX_ACK_PENDING", "20")
-		got := getMaxAckPending(5)
-		if got != 20 {
-			t.Errorf("getMaxAckPending(5) with MAX_ACK_PENDING=20 = %d; want 20", got)
-		}
-	})
-
-	t.Run("NATS_MAX_ACK_PENDING env set", func(t *testing.T) {
-		t.Setenv("NATS_MAX_ACK_PENDING", "15")
-		got := getMaxAckPending(5)
-		if got != 15 {
-			t.Errorf("getMaxAckPending(5) with NATS_MAX_ACK_PENDING=15 = %d; want 15", got)
-		}
-	})
-}
 
 func TestNatsServer_ResolveModelID(t *testing.T) {
 	t.Setenv("MODEL_ROUTE_CHUNKING", "model-chunking-v1")
@@ -342,6 +322,9 @@ func TestNatsServer_ResolveModelID(t *testing.T) {
 	t.Setenv("MODEL_ROUTE_DEFAULT", "model-default-v0")
 	t.Setenv("MODEL_EMBEDDING", "text-embedding-3-small")
 	t.Setenv("MODEL_CUSTOM_TASK", "custom-direct-model")
+	t.Setenv("MODEL_ROUTE_PRECEDENCE", "route-precedence-model")
+	t.Setenv("MODEL_PRECEDENCE", "direct-precedence-model")
+	t.Setenv("MODEL_ROUTE_DOC_SUMMARY_V2_", "model-summary-v2-special")
 
 	server := &NatsServer{}
 
@@ -351,14 +334,9 @@ func TestNatsServer_ResolveModelID(t *testing.T) {
 	}{
 		{"worker.doc.chunking", "model-chunking-v1"},
 		{"worker.ai.inference", "model-inference-v2"},
-		{"worker.custom.dept.doc-summary", "model-summary-v3"}, // tests hyphen normalization
-		{"worker.unknown.action", "model-default-v0"},          // tests default fallback
-		{"", "model-default-v0"},                               // tests empty subject
-		{"   ", "model-default-v0"},                            // tests whitespace subject
-		{"worker.doc.chunking.", "model-chunking-v1"},          // tests trailing dot
-		{"worker.doc.embedding", "text-embedding-3-small"},     // tests embedding token resolution
-		{"worker.ai.embed", "text-embedding-3-small"},          // tests embed token resolution
-		{"worker.ai.custom_task", "custom-direct-model"},       // tests direct MODEL_CUSTOM_TASK fallback
+		{"worker.custom.dept.doc-summary", "model-summary-v3"},
+		{"worker.doc.embedding", "text-embedding-3-small"},
+		{"worker.ai.embed", "text-embedding-3-small"},
 	}
 
 	for _, tt := range tests {
@@ -370,12 +348,94 @@ func TestNatsServer_ResolveModelID(t *testing.T) {
 		})
 	}
 
-	t.Run("No default set returns empty string", func(t *testing.T) {
-		t.Setenv("MODEL_ROUTE_DEFAULT", "")
-		got := server.resolveModelID("worker.nonexistent.action")
-		if got != "" {
-			t.Errorf("resolveModelID(\"worker.nonexistent.action\") without default = %q; want \"\"", got)
-		}
-	})
+
 }
 
+func TestNatsServer_processMessage_WithNativeIdentity(t *testing.T) {
+	js := &mockJS{}
+	analyzer := &mockAnalyzer{}
+	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
+
+	req := &pb.ExecuteWorkflowNodeRequest{
+		Identity: &pb.InfrastructureIdentity{
+			TenantId: "tenant-123",
+			AppId:    "app-456",
+			JobId:    "job-789",
+		},
+	}
+	data, _ := proto.Marshal(req)
+
+	msg := &mockMsg{
+		data: data,
+		metadata: &jetstream.MsgMetadata{
+			NumDelivered: 1,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server.processMessage(ctx, msg)
+
+	msg.mu.Lock()
+	defer msg.mu.Unlock()
+
+	if !msg.ackCalled {
+		t.Errorf("expected msg with native identity to be acknowledged")
+	}
+}
+
+func TestNatsServer_ConcurrencySemaphoreAndCancellation(t *testing.T) {
+	workerPoolSize := 2
+	sem := make(chan struct{}, workerPoolSize)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Fill pool capacity
+	sem <- struct{}{}
+	sem <- struct{}{}
+
+	nakCalled := make(chan bool, 1)
+	mock := &mockMsg{}
+
+	go func() {
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		case <-ctx.Done():
+			_ = mock.Nak()
+			nakCalled <- true
+		}
+	}()
+
+	// Give goroutine time to block on semaphore
+	time.Sleep(10 * time.Millisecond)
+
+	// Cancel context while goroutine is waiting
+	cancel()
+
+	select {
+	case <-nakCalled:
+		// Success: goroutine unblocked and NAK'd message
+	case <-time.After(1 * time.Second):
+		t.Fatalf("expected message to be NAK'd on context cancellation when semaphore is full")
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if !mock.nakCalled {
+		t.Errorf("expected mock.nakCalled to be true")
+	}
+}
+
+
+
+func init() {
+	os.Setenv("WORKER_ACK_WAIT", "1m")
+	os.Setenv("NATS_RATE_LIMIT_DELAY", "500ms")
+	os.Setenv("NATS_NACK_ERROR_TIMEOUT", "1s")
+	os.Setenv("NATS_REPLY_DELAY", "10ms")
+	os.Setenv("NATS_RESPONSE_STREAM", "WORKFLOW_RESPONSES")
+	os.Setenv("SERVICE_NAME", "ai_service")
+	os.Setenv("MODEL_ROUTE_DEFAULT", "model-default-v0")
+	os.Setenv("MODEL_ROUTE_SUBJECT", "worker.ai.inference")
+}

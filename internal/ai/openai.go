@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,15 +16,12 @@ import (
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 )
 
 func getInferenceTimeout() time.Duration {
-	if val := envutil.GetStringOrDefault("OLLAMA_TIMEOUT_MINUTES", ""); val != "" {
-		if mins, err := strconv.Atoi(val); err == nil && mins > 0 {
-			return time.Duration(mins) * time.Minute
-		}
-	}
-	return 5 * time.Minute
+	mins := envutil.MustGetInt("OLLAMA_TIMEOUT_MINUTES")
+	return time.Duration(mins) * time.Minute
 }
 
 type APIType string
@@ -172,7 +168,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 	return response, nil
 }
 
-func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
 
 	m := modelID
@@ -198,7 +194,7 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 	return o.callOpenAI(ctx, reqBody)
 }
 
-func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, "(See attached image(s))")
 
 	var contentArray []map[string]any
@@ -257,7 +253,7 @@ func (o *OpenAIAnalyzer) GenerateEmbedding(ctx context.Context, text string, mod
 		m = o.config.EmbeddingModel
 	}
 	if m == "" {
-		m = envutil.GetEmbeddingModel("all-minilm:latest")
+		m = envutil.GetEmbeddingModel()
 	}
 
 	reqBody := openAIEmbeddingRequest{

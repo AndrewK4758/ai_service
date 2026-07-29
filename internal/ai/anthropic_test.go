@@ -6,11 +6,19 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 )
+
+func init() {
+	os.Setenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+	os.Setenv("OPENAI_BASE_PROMPT", "You are a helpful AI assistant.")
+	os.Setenv("DEFAULT_VISION_PROMPT", "Describe the image.")
+}
 
 func TestAnthropicAnalyzer_AnalyzeText(t *testing.T) {
 	var capturedHeaderKey string
@@ -64,10 +72,11 @@ func TestAnthropicAnalyzer_AnalyzeText(t *testing.T) {
 
 	ctx := context.Background()
 	req := &pb.ExecuteWorkflowNodeRequest{}
+	parser := workflowparser.NewNodeRequestParser(req)
 	action := &pb.ActionDefinition{Name: "test_action"}
 
 	// Test 1: Fallback model
-	res, err := analyzer.AnalyzeText(ctx, "Sample document text", req, action, "")
+	res, err := analyzer.AnalyzeText(ctx, "Sample document text", parser, action, "")
 	if err != nil {
 		t.Fatalf("AnalyzeText failed: %v", err)
 	}
@@ -87,7 +96,7 @@ func TestAnthropicAnalyzer_AnalyzeText(t *testing.T) {
 	}
 
 	// Test 2: Model override
-	_, err = analyzer.AnalyzeText(ctx, "Sample text 2", req, action, "claude-3-haiku-20240307")
+	_, err = analyzer.AnalyzeText(ctx, "Sample text 2", parser, action, "claude-3-haiku-20240307")
 	if err != nil {
 		t.Fatalf("AnalyzeText with override failed: %v", err)
 	}
@@ -141,10 +150,11 @@ func TestAnthropicAnalyzer_AnalyzeImage(t *testing.T) {
 
 	ctx := context.Background()
 	req := &pb.ExecuteWorkflowNodeRequest{}
+	parser := workflowparser.NewNodeRequestParser(req)
 	action := &pb.ActionDefinition{Name: "vision_task"}
 	images := [][]byte{[]byte("fake-jpeg-bytes")}
 
-	res, err := analyzer.AnalyzeImage(ctx, images, req, action, "")
+	res, err := analyzer.AnalyzeImage(ctx, images, parser, action, "")
 	if err != nil {
 		t.Fatalf("AnalyzeImage failed: %v", err)
 	}

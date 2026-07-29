@@ -5,8 +5,10 @@ import (
 	"fmt"
 
 	pb "github.com/AndrewK4758/shared_protos"
+	"github.com/AndrewK4758/shared_utils/envutil"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -51,7 +53,7 @@ func NewBedrockAnalyzerWithClient(aiConfig OpenAIConfig, client BedrockRuntimeAP
 	}
 }
 
-func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
 
 	inferenceConfig := &types.InferenceConfiguration{
@@ -101,8 +103,8 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflow
 	return jsonclean.CleanJSON(txt.Value), nil
 }
 
-func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
-	prompt := "Please extract the text from this image as JSON."
+func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+	prompt := envutil.MustGetString("DEFAULT_VISION_PROMPT")
 	if action != nil && workflowCtx != nil {
 		prompt = buildPrompt(workflowCtx, action, "")
 	}

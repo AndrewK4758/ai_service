@@ -13,12 +13,7 @@ func TestNewAnalyzerFactory(t *testing.T) {
 		expectType string
 		expectErr  bool
 	}{
-		{
-			name:       "Default to OPENAI",
-			provider:   "",
-			expectType: "*ai.OpenAIAnalyzer",
-			expectErr:  false,
-		},
+
 		{
 			name:       "OPENAI",
 			provider:   "OPENAI",

@@ -25,7 +25,7 @@ func main() {
 	envutil.LoadEnv(".env", "ai_service/.env", "../.env", "../../.env")
 	logger.InitLogger()
 
-	queueSizeStr := envutil.GetStringOrDefault("APP_QUEUE_SIZE", "")
+	queueSizeStr := envutil.MustGetString("APP_QUEUE_SIZE")
 	if queueSizeStr == "" {
 		queueSizeStr = "100"
 	}
@@ -34,7 +34,7 @@ func main() {
 		logger.Fatal("AI_Service", "invalid APP_QUEUE_SIZE: %v", err)
 	}
 
-	workerPoolSizeStr := envutil.GetStringOrDefault("WORKER_POOL_SIZE", "")
+	workerPoolSizeStr := envutil.MustGetString("WORKER_POOL_SIZE")
 	if workerPoolSizeStr == "" {
 		workerPoolSizeStr = "5"
 	}
@@ -43,21 +43,21 @@ func main() {
 		logger.Fatal("AI_Service", "invalid WORKER_POOL_SIZE: %v", err)
 	}
 
-	aiHost := envutil.GetStringOrDefault("OPENAI_BASE_URL", "")
+	aiHost := envutil.MustGetString("OPENAI_BASE_URL")
 	if aiHost == "" {
 		aiHost = "http://localhost:11434/v1" // default for local Ollama via OpenAI spec
 	}
 
 	// Configure the dual AI models
-	aiTextModel := envutil.GetStringOrDefault("OPENAI_TEXT_MODEL", "gemma4:e4b-extended")
-	aiVisionModel := envutil.GetStringOrDefault("OPENAI_VISION_MODEL", "glm-ocr")
-	aiEmbeddingModel := envutil.GetEmbeddingModel("all-minilm:latest")
-	chunkingRoute := envutil.GetStringOrDefault("MODEL_ROUTE_CHUNKING", "gemma4-extended")
-	inferenceRoute := envutil.GetStringOrDefault("MODEL_ROUTE_INFERENCE", "gemma4:e4b-extended")
-	extractionRoute := envutil.GetStringOrDefault("MODEL_ROUTE_EXTRACTION", "gemma4:34b-extended")
+	aiTextModel := envutil.MustGetString("OPENAI_TEXT_MODEL")
+	aiVisionModel := envutil.MustGetString("OPENAI_VISION_MODEL")
+	aiEmbeddingModel := envutil.GetEmbeddingModel()
+	chunkingRoute := envutil.MustGetString("MODEL_ROUTE_CHUNKING")
+	inferenceRoute := envutil.MustGetString("MODEL_ROUTE_INFERENCE")
+	extractionRoute := envutil.MustGetString("MODEL_ROUTE_EXTRACTION")
 
 	// Connect to NATS
-	natsURL := envutil.GetStringOrDefault("NATS_URL", "")
+	natsURL := envutil.MustGetString("NATS_URL")
 	if natsURL == "" {
 		natsURL = "nats://127.0.0.1:4222"
 	}
@@ -72,12 +72,12 @@ func main() {
 		logger.Fatal("AI_Service", "failed to initialize JetStream: %v", err)
 	}
 
-	queueFilter := envutil.GetStringOrDefault("QUEUE_MODEL_FILTER", "")
+	queueFilter := envutil.MustGetString("QUEUE_MODEL_FILTER")
 	if queueFilter == "" {
 		queueFilter = ">" // consume all by default
 	}
 
-	maxAckPendingStr := envutil.GetStringOrDefault("NATS_MAX_ACK_PENDING", "")
+	maxAckPendingStr := envutil.MustGetString("NATS_MAX_ACK_PENDING")
 	if maxAckPendingStr == "" {
 		maxAckPendingStr = strconv.Itoa(workerPoolSize)
 	}
@@ -86,7 +86,7 @@ func main() {
 		logger.Fatal("AI_Service", "invalid NATS_MAX_ACK_PENDING: %v", err)
 	}
 
-	pullMaxMessagesStr := envutil.GetStringOrDefault("NATS_PULL_MAX_MESSAGES", "")
+	pullMaxMessagesStr := envutil.MustGetString("NATS_PULL_MAX_MESSAGES")
 	if pullMaxMessagesStr == "" {
 		pullMaxMessagesStr = strconv.Itoa(workerPoolSize)
 	}
@@ -95,7 +95,7 @@ func main() {
 		logger.Fatal("AI_Service", "invalid NATS_PULL_MAX_MESSAGES: %v", err)
 	}
 
-	temperatureStr := envutil.GetStringOrDefault("OPENAI_TEMPERATURE", "")
+	temperatureStr := envutil.MustGetString("OPENAI_TEMPERATURE")
 	if temperatureStr == "" {
 		temperatureStr = "0.0"
 	}
@@ -104,7 +104,7 @@ func main() {
 		logger.Fatal("AI_Service", "invalid OPENAI_TEMPERATURE: %v", err)
 	}
 
-	maxTokensStr := envutil.GetStringOrDefault("OPENAI_MAX_TOKENS", "")
+	maxTokensStr := envutil.MustGetString("OPENAI_MAX_TOKENS")
 	if maxTokensStr == "" {
 		maxTokensStr = "4096"
 	}
@@ -113,7 +113,7 @@ func main() {
 		logger.Fatal("AI_Service", "invalid OPENAI_MAX_TOKENS: %v", err)
 	}
 
-	timeoutStr := envutil.GetStringOrDefault("OPENAI_TIMEOUT_MINUTES", "")
+	timeoutStr := envutil.MustGetString("OPENAI_TIMEOUT_MINUTES")
 	if timeoutStr == "" {
 		timeoutStr = "5"
 	}
@@ -134,17 +134,17 @@ func main() {
 		Timeout: time.Duration(timeout) * time.Minute,
 	}
 
-	config.AnthropicAPIKey = envutil.GetStringOrDefault("ANTHROPIC_API_KEY", "")
-	config.AnthropicBaseURL = envutil.GetStringOrDefault("ANTHROPIC_BASE_URL", "")
-	config.AnthropicVersion = envutil.GetStringOrDefault("ANTHROPIC_VERSION", "")
-	config.AnthropicTextModel = envutil.GetStringOrDefault("ANTHROPIC_TEXT_MODEL", "")
-	config.AnthropicVisionModel = envutil.GetStringOrDefault("ANTHROPIC_VISION_MODEL", "")
+	config.AnthropicAPIKey = envutil.MustGetString("ANTHROPIC_API_KEY")
+	config.AnthropicBaseURL = envutil.MustGetString("ANTHROPIC_BASE_URL")
+	config.AnthropicVersion = envutil.MustGetString("ANTHROPIC_VERSION")
+	config.AnthropicTextModel = envutil.MustGetString("ANTHROPIC_TEXT_MODEL")
+	config.AnthropicVisionModel = envutil.MustGetString("ANTHROPIC_VISION_MODEL")
 
-	apiType := envutil.GetStringOrDefault("OPENAI_API_TYPE", "")
+	apiType := envutil.MustGetString("OPENAI_API_TYPE")
 	if apiType != "" {
 		config.APIType = ai.APIType(apiType)
 	}
-	authToken := envutil.GetStringOrDefault("OPENAI_AUTH_TOKEN", "")
+	authToken := envutil.MustGetString("OPENAI_AUTH_TOKEN")
 	if authToken != "" {
 		config.AuthToken = authToken
 	}

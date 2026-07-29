@@ -10,6 +10,7 @@ import (
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 )
 
 type VertexAnalyzer struct {
@@ -21,8 +22,8 @@ type VertexAnalyzer struct {
 }
 
 func NewVertexAnalyzer(config OpenAIConfig) (*VertexAnalyzer, error) {
-	projectID := envutil.GetStringOrDefault("VERTEX_PROJECT_ID", "")
-	location := envutil.GetStringOrDefault("VERTEX_LOCATION", "")
+	projectID := envutil.MustGetString("VERTEX_PROJECT_ID")
+	location := envutil.MustGetString("VERTEX_LOCATION")
 
 	if projectID == "" || location == "" {
 		return nil, fmt.Errorf("VERTEX_PROJECT_ID and VERTEX_LOCATION must be set")
@@ -43,7 +44,7 @@ func NewVertexAnalyzer(config OpenAIConfig) (*VertexAnalyzer, error) {
 	}, nil
 }
 
-func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
 
 	m := modelID
@@ -77,8 +78,8 @@ func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 	return "", fmt.Errorf("unexpected part type from vertex")
 }
 
-func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteWorkflowNodeRequest, action *pb.ActionDefinition, modelID string) (string, error) {
-	prompt := "Please extract the text from this image as JSON."
+func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+	prompt := envutil.MustGetString("DEFAULT_VISION_PROMPT")
 	if action != nil && workflowCtx != nil {
 		prompt = buildPrompt(workflowCtx, action, "")
 	}
