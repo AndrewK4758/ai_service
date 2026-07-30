@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"ai_service/internal/ai"
 
@@ -362,9 +364,27 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	result = jsonclean.CleanJSON(result)
 	logger.Info("AI_Service", "AI Output for Job %s:\n%s", j, result)
 
+	var outputMap map[string]any
+	if err := json.Unmarshal([]byte(result), &outputMap); err != nil {
+		if sendErr := s.sendErrorReply(ctx, replySubj, fmt.Sprintf("AI returned invalid JSON: %v", err)); sendErr != nil {
+			logger.Info("AI_Service", "Failed to send error reply: %v", sendErr)
+		}
+		_ = msg.Term()
+		return
+	}
+
+	actionResultStruct, err := structpb.NewStruct(outputMap)
+	if err != nil {
+		if sendErr := s.sendErrorReply(ctx, replySubj, fmt.Sprintf("Failed to convert AI output to struct: %v", err)); sendErr != nil {
+			logger.Info("AI_Service", "Failed to send error reply: %v", sendErr)
+		}
+		_ = msg.Term()
+		return
+	}
+
 	resp := &pb.PerformActionResponse{
-		Success:          true,
-		ActionResultJson: result,
+		Success:      true,
+		ActionResult: actionResultStruct,
 	}
 
 	respBytes, err := proto.Marshal(resp)

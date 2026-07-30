@@ -88,7 +88,14 @@ type openAIMessage struct {
 }
 
 type openAIResponseFormat struct {
-	Type string `json:"type"`
+	Type       string            `json:"type"`
+	JSONSchema *openAIJSONSchema `json:"json_schema,omitempty"`
+}
+
+type openAIJSONSchema struct {
+	Name   string `json:"name"`
+	Strict bool   `json:"strict"`
+	Schema any    `json:"schema"`
 }
 
 type openAIRequest struct {
@@ -186,9 +193,7 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 		},
 		Temperature: o.config.Temperature,
 		MaxTokens:   o.config.MaxTokens,
-		ResponseFormat: &openAIResponseFormat{
-			Type: "json_object",
-		},
+		ResponseFormat: buildResponseFormat(workflowCtx),
 	}
 
 	return o.callOpenAI(ctx, reqBody)
@@ -228,9 +233,7 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 		},
 		Temperature: o.config.Temperature,
 		MaxTokens:   o.config.MaxTokens,
-		ResponseFormat: &openAIResponseFormat{
-			Type: "json_object",
-		},
+		ResponseFormat: buildResponseFormat(workflowCtx),
 	}
 
 	return o.callOpenAI(ctx, reqBody)
@@ -312,4 +315,28 @@ func (o *OpenAIAnalyzer) GenerateEmbedding(ctx context.Context, text string, mod
 	}
 
 	return oaiResp.Data[0].Embedding, nil
+}
+
+func buildResponseFormat(workflowCtx *workflowparser.NodeRequestParser) *openAIResponseFormat {
+	if workflowCtx == nil {
+		return &openAIResponseFormat{Type: "json_object"}
+	}
+	schemaStr := workflowCtx.GetExpectedSchema()
+	if schemaStr == "" {
+		return &openAIResponseFormat{Type: "json_object"}
+	}
+
+	var schemaObj map[string]any
+	if err := json.Unmarshal([]byte(schemaStr), &schemaObj); err != nil {
+		return &openAIResponseFormat{Type: "json_object"}
+	}
+
+	return &openAIResponseFormat{
+		Type: "json_schema",
+		JSONSchema: &openAIJSONSchema{
+			Name:   "output_schema",
+			Strict: true,
+			Schema: schemaObj,
+		},
+	}
 }

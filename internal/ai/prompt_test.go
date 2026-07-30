@@ -26,7 +26,11 @@ func TestBuildPrompt_WithGlobalState_StructPB(t *testing.T) {
 		NodeConfig: &pb.NodeConfiguration{
 			InferenceInputKey:  "extracted_doc",
 			SystemInstructions: "Perform audit check",
-			ExpectedSchema:     `{"type": "object"}`,
+			ExpectedSchemaStruct: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"type": structpb.NewStringValue("object"),
+				},
+			},
 		},
 		GlobalState: &pb.GlobalState{Functional: funcStruct},
 	}
@@ -45,7 +49,7 @@ func TestBuildPrompt_WithGlobalState_StructPB(t *testing.T) {
 	}
 
 	// Verify ExpectedSchema
-	if !strings.Contains(prompt, `{"type": "object"}`) {
+	if !strings.Contains(strings.ReplaceAll(prompt, " ", ""), `{"type":"object"}`) {
 		t.Errorf("expected ExpectedSchema in prompt")
 	}
 
