@@ -264,7 +264,11 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	// textToAnalyze is intentionally left blank here because prompt.go already injects req.GlobalState.
 	// We only use textToAnalyze if we need to pass a specific distinct document (e.g. OCR text).
 
-	modelID := s.resolveModelID(msg.Subject())
+	targetSubj := parser.GetTargetWorkerSubject()
+	if targetSubj == "" {
+		targetSubj = msg.Subject()
+	}
+	modelID := s.resolveModelID(targetSubj)
 	result, err = s.analyzer.AnalyzeText(ctx, textToAnalyze, parser, nil, modelID)
 
 	if err != nil {

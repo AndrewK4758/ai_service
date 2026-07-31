@@ -143,6 +143,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 	}
 
 	logger.Info("AI_Service", "[Ai Service] Sending request to %s with model %s", url, reqBody.Model)
+	logger.Info("AI_Service", "[Ai Service] Request Body: %s", string(jsonData))
 
 	resp, err := o.config.HTTPClient.Do(req)
 	if err != nil {
@@ -177,6 +178,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) 
 
 func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(workflowCtx, action, text)
+	logger.Info("AI_Service", "[Ai Service] Built Prompt before sending:\n%s\n", prompt)
 
 	m := modelID
 	if m == "" {
