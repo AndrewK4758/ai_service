@@ -9,6 +9,7 @@ import (
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
+	"github.com/AndrewK4758/shared_utils/envutil"
 	"github.com/AndrewK4758/shared_utils/logger"
 
 	"github.com/nats-io/nats.go"
@@ -51,7 +52,7 @@ func main() {
 	fmt.Printf("Found %d file(s) to process.\n", len(filesToProcess))
 
 	// Connect to our gRPC Server
-	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(envutil.MustGetString("SERVER_PORT"), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		logger.Fatal("AI_Service", "did not connect: %v", err)
 	}
