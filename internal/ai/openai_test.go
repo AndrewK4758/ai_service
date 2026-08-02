@@ -135,3 +135,44 @@ func TestOpenAIAnalyzer_AnalyzeImage(t *testing.T) {
 		t.Errorf("OpenAIAnalyzer.AnalyzeImage() expected 'vision', got %v", got)
 	}
 }
+
+func TestOpenAIAnalyzer_AnalyzeImage_VisionBaseURL(t *testing.T) {
+	textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("text server should not receive vision requests")
+	}))
+	defer textServer.Close()
+
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("Expected path /chat/completions, got %s", r.URL.Path)
+		}
+		resp := openAIResponse{}
+		resp.Choices = append(resp.Choices, struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		}{
+			Message: struct {
+				Content string `json:"content"`
+			}{
+				Content: `{"vision":"routed_to_vision_host"}`,
+			},
+		})
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer visionServer.Close()
+
+	config := DefaultLocalConfig()
+	config.BaseURL = textServer.URL
+	config.VisionBaseURL = visionServer.URL
+	config.VisionModel = "glm-ocr"
+	analyzer := NewOpenAIAnalyzerWithConfig(config)
+
+	got, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fakeimage")}, nil, nil, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(got, "routed_to_vision_host") {
+		t.Errorf("expected vision response routed to vision server, got: %s", got)
+	}
+}

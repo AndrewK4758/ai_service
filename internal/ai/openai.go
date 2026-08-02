@@ -35,6 +35,7 @@ const (
 type OpenAIConfig struct {
 	AuthToken            string
 	BaseURL              string
+	VisionBaseURL        string
 	APIType              APIType
 	APIVersion           string
 	HTTPClient           *http.Client
@@ -114,13 +115,17 @@ type openAIResponse struct {
 	} `json:"choices"`
 }
 
-func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest) (string, error) {
+func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest, baseURLOverride ...string) (string, error) {
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal openai request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(o.config.BaseURL, "/"))
+	baseURL := o.config.BaseURL
+	if len(baseURLOverride) > 0 && baseURLOverride[0] != "" {
+		baseURL = baseURLOverride[0]
+	}
+	url := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
 
 	// Create context using the HTTP client's timeout for safety, default to 5m if 0
 	timeout := o.config.HTTPClient.Timeout
@@ -238,7 +243,7 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 		ResponseFormat: buildResponseFormat(workflowCtx),
 	}
 
-	return o.callOpenAI(ctx, reqBody)
+	return o.callOpenAI(ctx, reqBody, o.config.VisionBaseURL)
 }
 
 type openAIEmbeddingRequest struct {

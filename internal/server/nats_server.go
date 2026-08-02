@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,6 +18,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"ai_service/internal/ai"
+	docparser "ai_service/internal/parser"
+	"ai_service/internal/storage"
 
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
@@ -30,19 +33,19 @@ type NatsServer struct {
 	nc              *nats.Conn
 	js              jetstream.JetStream
 	analyzer        ai.Analyzer
+	store           storage.Manager
 	workerPoolSize  int
 	queueFilter     string
 	maxAckPending   int
 	pullMaxMessages int
 }
 
-
-
-func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, workerPoolSize int, queueFilter string, maxAckPending int, pullMaxMessages int) *NatsServer {
+func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, store storage.Manager, workerPoolSize int, queueFilter string, maxAckPending int, pullMaxMessages int) *NatsServer {
 	return &NatsServer{
 		nc:              nc,
 		js:              js,
 		analyzer:        analyzer,
+		store:           store,
 		workerPoolSize:  workerPoolSize,
 		queueFilter:     queueFilter,
 		maxAckPending:   maxAckPending,
@@ -114,6 +117,17 @@ func (s *NatsServer) Start(ctx context.Context) error {
 	return nil
 }
 
+func getReplySubject(msg jetstream.Msg) string {
+	if msg == nil {
+		return ""
+	}
+	headers := msg.Headers()
+	if headers == nil {
+		return ""
+	}
+	return headers.Get("Reply-Subject")
+}
+
 func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	startTime := time.Now()
 	meta, err := msg.Metadata()
@@ -143,47 +157,12 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	})
 
 	if err == nil && meta.NumDelivered > 5 {
-		logger.Info("AI_Service", "Message exceeded max delivery attempts, terminating")
-		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-			Component:  "AI_Service",
-			Event:      "TERMINATED",
-			Stream:     "WORKERS",
-			Subject:    msg.Subject(),
-			Consumer:   durableName,
-			TenantID:   t,
-			AppID:      a,
-			JobID:      j,
-			Attempt:    attempt,
-			DurationMs: time.Since(startTime).Milliseconds(),
-			Error:      fmt.Errorf("exceeded max delivery attempts (5)"),
-		})
-		replySubj := ""
-		if headers := msg.Headers(); headers != nil {
-			replySubj = headers.Get("Reply-Subject")
-		}
-		if sendErr := s.sendErrorReply(ctx, replySubj, "Action failed after multiple retries due to rate limits."); sendErr != nil {
-			logger.Info("AI_Service", "Failed to send error reply: %v", sendErr)
-		}
-		_ = msg.Term()
+		s.handleExceededRetries(ctx, msg, durableName, t, a, j, attempt, startTime)
 		return
 	}
 
 	if ctx.Err() != nil {
-		logger.Info("AI_Service", "Context canceled, NAKing message: %v", ctx.Err())
-		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-			Component:  "AI_Service",
-			Event:      "NACKED",
-			Stream:     "WORKERS",
-			Subject:    msg.Subject(),
-			Consumer:   durableName,
-			TenantID:   t,
-			AppID:      a,
-			JobID:      j,
-			Attempt:    attempt,
-			DurationMs: time.Since(startTime).Milliseconds(),
-			Error:      ctx.Err(),
-		})
-		_ = msg.Nak()
+		s.handleContextCanceled(msg, durableName, t, a, j, attempt, startTime)
 		return
 	}
 
@@ -200,188 +179,383 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	done := make(chan struct{})
 	defer close(done)
 
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				if err := msg.InProgress(); err == nil {
-					natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-						Component: "AI_Service",
-						Event:     "IN_PROGRESS",
-						Stream:    "WORKERS",
-						Subject:   msg.Subject(),
-						Consumer:  durableName,
-						TenantID:  t,
-						AppID:     a,
-						JobID:     j,
-						Attempt:   attempt,
-					})
-				}
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	go s.runKeepAlive(ctx, msg, ticker, done, durableName, t, a, j, attempt)
 	// --- END of InProgress keep-alive loop ---
 
 	logger.Info("AI_Service", "Received action request on subject: %s", msg.Subject())
-
-	var replySubj string
-	if headers := msg.Headers(); headers != nil {
-		replySubj = headers.Get("Reply-Subject")
-	}
+	replySubj := getReplySubject(msg)
 
 	req := &pb.ExecuteWorkflowNodeRequest{}
 	if err := proto.Unmarshal(msg.Data(), req); err != nil {
-		logger.Info("AI_Service", "Error unmarshaling request: %v", err)
-		if sendErr := s.sendErrorReply(ctx, replySubj, fmt.Sprintf("invalid payload: %v", err)); sendErr != nil {
-			logger.Info("AI_Service", "Failed to send error reply: %v", sendErr)
-		}
-		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-			Component:  "AI_Service",
-			Event:      "TERMINATED",
-			Stream:     "WORKERS",
-			Subject:    msg.Subject(),
-			Consumer:   durableName,
-			TenantID:   t,
-			AppID:      a,
-			JobID:      j,
-			Attempt:    attempt,
-			DurationMs: time.Since(startTime).Milliseconds(),
-			Error:      err,
-		})
-		_ = msg.Term()
+		s.handleUnmarshalError(ctx, msg, replySubj, err, durableName, t, a, j, attempt, startTime)
 		return
 	}
 
 	parser := workflowparser.NewNodeRequestParser(req)
 	t, a, j = parser.ExtractIdentity()
 
-	var result string
-	var textToAnalyze string
-	// textToAnalyze is intentionally left blank here because prompt.go already injects req.GlobalState.
-	// We only use textToAnalyze if we need to pass a specific distinct document (e.g. OCR text).
-
 	targetSubj := parser.GetTargetWorkerSubject()
 	if targetSubj == "" {
 		targetSubj = msg.Subject()
 	}
 	modelID := s.resolveModelID(targetSubj)
-	result, err = s.analyzer.AnalyzeText(ctx, textToAnalyze, parser, nil, modelID)
 
+	result, errCode, err := s.executeAction(ctx, parser, targetSubj, modelID)
 	if err != nil {
-		if ctx.Err() != nil {
-			logger.Info("AI_Service", "Context canceled during AI analysis, NAKing message: %v", ctx.Err())
-			natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-				Component:  "AI_Service",
-				Event:      "NACKED",
-				Stream:     "WORKERS",
-				Subject:    msg.Subject(),
-				Consumer:   durableName,
-				TenantID:   t,
-				AppID:      a,
-				JobID:      j,
-				Attempt:    attempt,
-				DurationMs: time.Since(startTime).Milliseconds(),
-				Error:      ctx.Err(),
-			})
-			_ = msg.Nak()
-			return
-		}
-		logger.Info("AI_Service", "AI analysis failed: %v", err)
-		errStr := strings.ToLower(err.Error())
-
-		isRateLimit := strings.Contains(errStr, "429") || strings.Contains(errStr, "too many requests") || strings.Contains(errStr, "throttlingexception") || strings.Contains(errStr, "quota")
-		isTempError := strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "eof")
-
-		if isRateLimit {
-			natsRateLimitDelayStr := envutil.MustGetString("NATS_RATE_LIMIT_DELAY")
-			natsRateLimitDelay, errParse := strconv.Atoi(natsRateLimitDelayStr)
-			if errParse != nil || natsRateLimitDelay <= 0 {
-				natsRateLimitDelay = 5
-			}
-			backoffDelay := time.Duration(1<<attempt) * time.Duration(natsRateLimitDelay) * time.Second
-			logger.Info("AI_Service", "Rate limited by provider, applying NakWithDelay of %v", backoffDelay)
-			natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-				Component:  "AI_Service",
-				Event:      "NACKED",
-				Stream:     "WORKERS",
-				Subject:    msg.Subject(),
-				Consumer:   durableName,
-				TenantID:   t,
-				AppID:      a,
-				JobID:      j,
-				Attempt:    attempt,
-				DurationMs: time.Since(startTime).Milliseconds(),
-				Error:      err,
-			})
-			_ = msg.NakWithDelay(backoffDelay)
-			return
-		}
-
-		if isTempError {
-			natsErrorTimeoutStr := envutil.MustGetString("NATS_NACK_ERROR_TIMEOUT")
-			natsErrorTimeout, errParse := strconv.Atoi(natsErrorTimeoutStr)
-			if errParse != nil || natsErrorTimeout <= 0 {
-				natsErrorTimeout = 15
-			}
-			logger.Info("AI_Service", "Temporary server error, applying NakWithDelay of %ds", natsErrorTimeout)
-			natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-				Component:  "AI_Service",
-				Event:      "NACKED",
-				Stream:     "WORKERS",
-				Subject:    msg.Subject(),
-				Consumer:   durableName,
-				TenantID:   t,
-				AppID:      a,
-				JobID:      j,
-				Attempt:    attempt,
-				DurationMs: time.Since(startTime).Milliseconds(),
-				Error:      err,
-			})
-			_ = msg.NakWithDelay(time.Duration(natsErrorTimeout) * time.Second)
-			return
-		}
-
-		if sendErr := s.sendErrorReply(ctx, replySubj, fmt.Sprintf("failed to perform action on payload: %v", err)); sendErr != nil {
-			logger.Info("AI_Service", "Failed to send error reply: %v", sendErr)
-		}
-		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-			Component:  "AI_Service",
-			Event:      "TERMINATED",
-			Stream:     "WORKERS",
-			Subject:    msg.Subject(),
-			Consumer:   durableName,
-			TenantID:   t,
-			AppID:      a,
-			JobID:      j,
-			Attempt:    attempt,
-			DurationMs: time.Since(startTime).Milliseconds(),
-			Error:      err,
-		})
-		_ = msg.Term()
+		s.handleExecutionError(ctx, msg, replySubj, parser, errCode, err, durableName, t, a, j, attempt, startTime)
 		return
 	}
 
+	s.handleExecutionSuccess(ctx, msg, replySubj, parser, result, durableName, t, a, j, attempt, startTime)
+}
+
+func (s *NatsServer) handleExceededRetries(ctx context.Context, msg jetstream.Msg, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+	logger.Info("AI_Service", "Message exceeded max delivery attempts, terminating")
+	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+		Component:  "AI_Service",
+		Event:      "TERMINATED",
+		Stream:     "WORKERS",
+		Subject:    msg.Subject(),
+		Consumer:   durableName,
+		TenantID:   t,
+		AppID:      a,
+		JobID:      j,
+		Attempt:    attempt,
+		DurationMs: time.Since(startTime).Milliseconds(),
+		Error:      fmt.Errorf("exceeded max delivery attempts (5)"),
+	})
+	replySubj := getReplySubject(msg)
+	errReply := s.sendErrorReply(ctx, replySubj, "[Step: WORKER_DEQUEUE, URI: unknown] Action failed after multiple retries due to rate limits.", "EXCEEDED_MAX_RETRIES")
+	if errReply != nil {
+		logger.Info("AI_Service", "Failed to send error reply: %v", errReply)
+	}
+	_ = msg.Term()
+}
+
+func (s *NatsServer) handleContextCanceled(msg jetstream.Msg, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+	logger.Info("AI_Service", "Context canceled, NAKing message")
+	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+		Component:  "AI_Service",
+		Event:      "NACKED",
+		Stream:     "WORKERS",
+		Subject:    msg.Subject(),
+		Consumer:   durableName,
+		TenantID:   t,
+		AppID:      a,
+		JobID:      j,
+		Attempt:    attempt,
+		DurationMs: time.Since(startTime).Milliseconds(),
+	})
+	_ = msg.Nak()
+}
+
+func (s *NatsServer) runKeepAlive(ctx context.Context, msg jetstream.Msg, ticker *time.Ticker, done chan struct{}, durableName, t, a, j string, attempt uint64) {
+	for {
+		select {
+		case <-ticker.C:
+			s.sendKeepAlive(msg, durableName, t, a, j, attempt)
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (s *NatsServer) sendKeepAlive(msg jetstream.Msg, durableName, t, a, j string, attempt uint64) {
+	if err := msg.InProgress(); err != nil {
+		return
+	}
+	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+		Component: "AI_Service",
+		Event:     "IN_PROGRESS",
+		Stream:    "WORKERS",
+		Subject:   msg.Subject(),
+		Consumer:  durableName,
+		TenantID:  t,
+		AppID:     a,
+		JobID:     j,
+		Attempt:   attempt,
+	})
+}
+
+func (s *NatsServer) handleUnmarshalError(ctx context.Context, msg jetstream.Msg, replySubj string, err error, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+	logger.Info("AI_Service", "Error unmarshaling request: %v", err)
+	errMsg := fmt.Sprintf("[Step: WORKER_DEQUEUE, URI: unknown] invalid payload: %v", err)
+	errReply := s.sendErrorReply(ctx, replySubj, errMsg, "INVALID_PAYLOAD")
+	if errReply != nil {
+		logger.Info("AI_Service", "Failed to send error reply: %v", errReply)
+	}
+	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+		Component:  "AI_Service",
+		Event:      "TERMINATED",
+		Stream:     "WORKERS",
+		Subject:    msg.Subject(),
+		Consumer:   durableName,
+		TenantID:   t,
+		AppID:      a,
+		JobID:      j,
+		Attempt:    attempt,
+		DurationMs: time.Since(startTime).Milliseconds(),
+		Error:      err,
+	})
+	_ = msg.Term()
+}
+
+func (s *NatsServer) executeAction(ctx context.Context, parser *workflowparser.NodeRequestParser, targetSubj string, modelID string) (string, string, error) {
+	docUri := parser.GetDocumentUri()
+	if docUri != "" {
+		return s.processDocumentJIT(ctx, docUri, parser, modelID, targetSubj)
+	}
+	res, err := s.analyzer.AnalyzeText(ctx, "", parser, nil, modelID)
+	if err != nil {
+		step := getStepName(parser)
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: N/A] failed to perform action on payload: %w", step, err)
+	}
+	return res, "", nil
+}
+
+func (s *NatsServer) processDocumentJIT(ctx context.Context, docUri string, parser *workflowparser.NodeRequestParser, modelID string, targetSubj string) (string, string, error) {
+	step := getStepName(parser)
+	if s.store == nil {
+		return "", "STORAGE_FETCH_FAILED", fmt.Errorf("[Step: %s, URI: %s] storage manager is not configured", step, docUri)
+	}
+
+	fileBytes, err := s.store.FetchFile(ctx, docUri, parser.GetIdentity())
+	if err != nil {
+		return "", "STORAGE_FETCH_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to fetch document from storage: %w", step, docUri, err)
+	}
+
+	return s.dispatchBytesToAnalyzer(ctx, fileBytes, docUri, parser, modelID, targetSubj)
+}
+
+func (s *NatsServer) dispatchBytesToAnalyzer(ctx context.Context, fileBytes []byte, docUri string, parser *workflowparser.NodeRequestParser, modelID string, targetSubj string) (string, string, error) {
+	step := getStepName(parser)
+	ext := strings.ToLower(filepath.Ext(docUri))
+	isVision := isVisionRequest(targetSubj, modelID, ext)
+
+	if isVision {
+		return s.processVisionBytes(ctx, fileBytes, ext, step, docUri, parser, modelID)
+	}
+
+	if ext == ".pdf" {
+		return s.processPdfTextBytes(ctx, fileBytes, step, docUri, parser, modelID)
+	}
+
+	if ext == ".docx" {
+		return s.processDocxTextBytes(ctx, fileBytes, step, docUri, parser, modelID)
+	}
+
+	text := string(fileBytes)
+	fileBytes = nil
+	res, err := s.analyzer.AnalyzeText(ctx, text, parser, nil, modelID)
+	if err != nil {
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, err)
+	}
+	return res, "", nil
+}
+
+func (s *NatsServer) processVisionBytes(ctx context.Context, fileBytes []byte, ext string, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+	if ext == ".pdf" {
+		return s.processPdfVisionBytes(ctx, fileBytes, step, docUri, parser, modelID)
+	}
+	return s.processRawImageBytes(ctx, fileBytes, step, docUri, parser, modelID)
+}
+
+func (s *NatsServer) processPdfVisionBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+	images, err := docparser.ConvertPdfToImages(fileBytes)
+	fileBytes = nil
+	if err != nil {
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] pdftoppm failed: %w", step, docUri, err)
+	}
+	res, analyzeErr := s.analyzer.AnalyzeImage(ctx, images, parser, nil, modelID)
+	images = nil
+	if analyzeErr != nil {
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
+	}
+	return res, "", nil
+}
+
+func (s *NatsServer) processRawImageBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+	images := [][]byte{fileBytes}
+	fileBytes = nil
+	res, analyzeErr := s.analyzer.AnalyzeImage(ctx, images, parser, nil, modelID)
+	images = nil
+	if analyzeErr != nil {
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
+	}
+	return res, "", nil
+}
+
+func (s *NatsServer) processPdfTextBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+	text, err := docparser.ExtractPdfText(fileBytes)
+	fileBytes = nil
+	if err != nil {
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] pdftotext failed: %w", step, docUri, err)
+	}
+	res, analyzeErr := s.analyzer.AnalyzeText(ctx, text, parser, nil, modelID)
+	if analyzeErr != nil {
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
+	}
+	return res, "", nil
+}
+
+func (s *NatsServer) processDocxTextBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+	text, err := docparser.ExtractDocxText(fileBytes)
+	fileBytes = nil
+	if err != nil {
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] docx extraction failed: %w", step, docUri, err)
+	}
+	res, analyzeErr := s.analyzer.AnalyzeText(ctx, text, parser, nil, modelID)
+	if analyzeErr != nil {
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
+	}
+	return res, "", nil
+}
+
+func getStepName(parser *workflowparser.NodeRequestParser) string {
+	if parser == nil {
+		return "UNKNOWN"
+	}
+	if step := parser.GetStepId(); step != "" {
+		return step
+	}
+	if node := parser.GetNodeName(); node != "" {
+		return node
+	}
+	return "AI_PROCESSING"
+}
+
+func isVisionRequest(targetSubj string, modelID string, ext string) bool {
+	subjLower := strings.ToLower(targetSubj)
+	if strings.Contains(subjLower, "vision") || strings.Contains(subjLower, "image") || strings.Contains(subjLower, "ocr") {
+		return true
+	}
+	modelLower := strings.ToLower(modelID)
+	if strings.Contains(modelLower, "vision") || strings.Contains(modelLower, "gpt-4o") || strings.Contains(modelLower, "claude-3") {
+		return true
+	}
+	if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".webp" || ext == ".tiff" || ext == ".bmp" {
+		return true
+	}
+	return false
+}
+
+func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg, replySubj string, parser *workflowparser.NodeRequestParser, errCode string, err error, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+	if ctx.Err() != nil {
+		s.handleContextCanceled(msg, durableName, t, a, j, attempt, startTime)
+		return
+	}
+	logger.Info("AI_Service", "AI processing failed: %v", err)
+	errStr := strings.ToLower(err.Error())
+
+	isRateLimit := strings.Contains(errStr, "429") || strings.Contains(errStr, "too many requests") || strings.Contains(errStr, "throttlingexception") || strings.Contains(errStr, "quota")
+	if isRateLimit {
+		s.handleRateLimitError(msg, err, durableName, t, a, j, attempt, startTime)
+		return
+	}
+
+	isTempError := strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "eof")
+	if isTempError {
+		s.handleTempError(msg, err, durableName, t, a, j, attempt, startTime)
+		return
+	}
+
+	if errCode == "" {
+		errCode = "AI_PROCESSING_FAILED"
+	}
+	errReply := s.sendErrorReply(ctx, replySubj, err.Error(), errCode)
+	if errReply != nil {
+		logger.Info("AI_Service", "Failed to send error reply: %v", errReply)
+	}
+	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+		Component:  "AI_Service",
+		Event:      "TERMINATED",
+		Stream:     "WORKERS",
+		Subject:    msg.Subject(),
+		Consumer:   durableName,
+		TenantID:   t,
+		AppID:      a,
+		JobID:      j,
+		Attempt:    attempt,
+		DurationMs: time.Since(startTime).Milliseconds(),
+		Error:      err,
+	})
+	_ = msg.Term()
+}
+
+func (s *NatsServer) handleRateLimitError(msg jetstream.Msg, err error, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+	natsRateLimitDelayStr := envutil.MustGetString("NATS_RATE_LIMIT_DELAY")
+	natsRateLimitDelay, errParse := strconv.Atoi(natsRateLimitDelayStr)
+	if errParse != nil || natsRateLimitDelay <= 0 {
+		natsRateLimitDelay = 5
+	}
+	backoffDelay := time.Duration(1<<attempt) * time.Duration(natsRateLimitDelay) * time.Second
+	logger.Info("AI_Service", "Rate limited by provider, applying NakWithDelay of %v", backoffDelay)
+	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+		Component:  "AI_Service",
+		Event:      "NACKED",
+		Stream:     "WORKERS",
+		Subject:    msg.Subject(),
+		Consumer:   durableName,
+		TenantID:   t,
+		AppID:      a,
+		JobID:      j,
+		Attempt:    attempt,
+		DurationMs: time.Since(startTime).Milliseconds(),
+		Error:      err,
+	})
+	_ = msg.NakWithDelay(backoffDelay)
+}
+
+func (s *NatsServer) handleTempError(msg jetstream.Msg, err error, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+	natsErrorTimeoutStr := envutil.MustGetString("NATS_NACK_ERROR_TIMEOUT")
+	natsErrorTimeout, errParse := strconv.Atoi(natsErrorTimeoutStr)
+	if errParse != nil || natsErrorTimeout <= 0 {
+		natsErrorTimeout = 15
+	}
+	logger.Info("AI_Service", "Temporary server error, applying NakWithDelay of %ds", natsErrorTimeout)
+	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+		Component:  "AI_Service",
+		Event:      "NACKED",
+		Stream:     "WORKERS",
+		Subject:    msg.Subject(),
+		Consumer:   durableName,
+		TenantID:   t,
+		AppID:      a,
+		JobID:      j,
+		Attempt:    attempt,
+		DurationMs: time.Since(startTime).Milliseconds(),
+		Error:      err,
+	})
+	_ = msg.NakWithDelay(time.Duration(natsErrorTimeout) * time.Second)
+}
+
+func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.Msg, replySubj string, parser *workflowparser.NodeRequestParser, result string, durableName, t, a, j string, attempt uint64, startTime time.Time) {
 	result = jsonclean.CleanJSON(result)
 	logger.Info("AI_Service", "AI Output for Job %s:\n%s", j, result)
 
+	docUri := parser.GetDocumentUri()
+	uriStr := docUri
+	if uriStr == "" {
+		uriStr = "N/A"
+	}
+	step := getStepName(parser)
+
 	var outputMap map[string]any
 	if err := json.Unmarshal([]byte(result), &outputMap); err != nil {
-		if sendErr := s.sendErrorReply(ctx, replySubj, fmt.Sprintf("AI returned invalid JSON: %v", err)); sendErr != nil {
-			logger.Info("AI_Service", "Failed to send error reply: %v", sendErr)
-		}
+		errMsg := fmt.Sprintf("[Step: %s, URI: %s] AI returned invalid JSON: %v", step, uriStr, err)
+		errReply := s.sendErrorReply(ctx, replySubj, errMsg, "INVALID_AI_OUTPUT")
+		s.logReplyError(errReply)
 		_ = msg.Term()
 		return
 	}
 
 	actionResultStruct, err := structpb.NewStruct(outputMap)
 	if err != nil {
-		if sendErr := s.sendErrorReply(ctx, replySubj, fmt.Sprintf("Failed to convert AI output to struct: %v", err)); sendErr != nil {
-			logger.Info("AI_Service", "Failed to send error reply: %v", sendErr)
-		}
+		errMsg := fmt.Sprintf("[Step: %s, URI: %s] Failed to convert AI output to struct: %v", step, uriStr, err)
+		errReply := s.sendErrorReply(ctx, replySubj, errMsg, "STRUCT_CONVERSION_FAILED")
+		s.logReplyError(errReply)
 		_ = msg.Term()
 		return
 	}
@@ -412,52 +586,37 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	}
 
 	if replySubj != "" {
-		natsReplyDelayStr := envutil.MustGetString("NATS_REPLY_DELAY")
-		natsReplyDelay, errParse := strconv.Atoi(natsReplyDelayStr)
-		if errParse != nil || natsReplyDelay <= 0 {
-			natsReplyDelay = 15
-		}
-		replyStream := envutil.MustGetString("NATS_RESPONSE_STREAM")
-		_, pubErr := s.js.Publish(ctx, replySubj, respBytes)
-		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-			Component: "AI_Service",
-			Event:     "ENQUEUED",
-			Stream:    replyStream,
-			Subject:   replySubj,
-			TenantID:  t,
-			AppID:     a,
-			JobID:     j,
-			SizeBytes: len(respBytes),
-			Error:     pubErr,
-		})
-		if pubErr != nil {
-			logger.Info("AI_Service", "Failed to publish reply to NATS %s: %v", replySubj, pubErr)
-			natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-				Component:  "AI_Service",
-				Event:      "NACKED",
-				Stream:     "WORKERS",
-				Subject:    msg.Subject(),
-				Consumer:   durableName,
-				TenantID:   t,
-				AppID:      a,
-				JobID:      j,
-				Attempt:    attempt,
-				DurationMs: time.Since(startTime).Milliseconds(),
-				Error:      pubErr,
-			})
-			msg.NakWithDelay(time.Duration(natsReplyDelay) * time.Second)
-			return
-		}
+		s.publishSuccessReply(ctx, msg, replySubj, respBytes, durableName, t, a, j, attempt, startTime)
+		return
 	}
 
-	durationMs := time.Since(startTime).Milliseconds()
-	if err := msg.Ack(); err != nil {
-		logger.Info("AI_Service", "Failed to ack msg: %v", err)
-	} else {
-		logger.Info("AI_Service", "Successfully completed action and replied to %s", replySubj)
+	s.ackMessage(msg, durableName, t, a, j, attempt, startTime)
+}
+
+func (s *NatsServer) publishSuccessReply(ctx context.Context, msg jetstream.Msg, replySubj string, respBytes []byte, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+	natsReplyDelayStr := envutil.MustGetString("NATS_REPLY_DELAY")
+	natsReplyDelay, errParse := strconv.Atoi(natsReplyDelayStr)
+	if errParse != nil || natsReplyDelay <= 0 {
+		natsReplyDelay = 15
+	}
+	replyStream := envutil.MustGetString("NATS_RESPONSE_STREAM")
+	_, pubErr := s.js.Publish(ctx, replySubj, respBytes)
+	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+		Component: "AI_Service",
+		Event:     "ENQUEUED",
+		Stream:    replyStream,
+		Subject:   replySubj,
+		TenantID:  t,
+		AppID:     a,
+		JobID:     j,
+		SizeBytes: len(respBytes),
+		Error:     pubErr,
+	})
+	if pubErr != nil {
+		logger.Info("AI_Service", "Failed to publish reply to NATS %s: %v", replySubj, pubErr)
 		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
 			Component:  "AI_Service",
-			Event:      "ACKNOWLEDGED",
+			Event:      "NACKED",
 			Stream:     "WORKERS",
 			Subject:    msg.Subject(),
 			Consumer:   durableName,
@@ -465,9 +624,34 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 			AppID:      a,
 			JobID:      j,
 			Attempt:    attempt,
-			DurationMs: durationMs,
+			DurationMs: time.Since(startTime).Milliseconds(),
+			Error:      pubErr,
 		})
+		_ = msg.NakWithDelay(time.Duration(natsReplyDelay) * time.Second)
+		return
 	}
+	s.ackMessage(msg, durableName, t, a, j, attempt, startTime)
+}
+
+func (s *NatsServer) ackMessage(msg jetstream.Msg, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+	durationMs := time.Since(startTime).Milliseconds()
+	if err := msg.Ack(); err != nil {
+		logger.Info("AI_Service", "Failed to ack msg: %v", err)
+		return
+	}
+	logger.Info("AI_Service", "Successfully completed action and replied")
+	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+		Component:  "AI_Service",
+		Event:      "ACKNOWLEDGED",
+		Stream:     "WORKERS",
+		Subject:    msg.Subject(),
+		Consumer:   durableName,
+		TenantID:   t,
+		AppID:      a,
+		JobID:      j,
+		Attempt:    attempt,
+		DurationMs: durationMs,
+	})
 }
 
 func (s *NatsServer) sendErrorReply(ctx context.Context, replySubject, errMsg string, opts ...string) error {
@@ -475,6 +659,9 @@ func (s *NatsServer) sendErrorReply(ctx context.Context, replySubject, errMsg st
 		return nil
 	}
 	source := envutil.MustGetString("SERVICE_NAME")
+	if source == "" {
+		source = "ai_service"
+	}
 	code := "INTERNAL_ERROR"
 	if len(opts) > 0 && opts[0] != "" {
 		code = opts[0]
@@ -497,6 +684,13 @@ func (s *NatsServer) sendErrorReply(ctx context.Context, replySubject, errMsg st
 	return nil
 }
 
+func (s *NatsServer) logReplyError(err error) {
+	if err == nil {
+		return
+	}
+	logger.Info("AI_Service", "Failed to send error reply: %v", err)
+}
+
 var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 
 func (s *NatsServer) resolveModelID(subject string) string {
@@ -515,17 +709,17 @@ func (s *NatsServer) resolveModelID(subject string) string {
 		}
 	}
 
-	if trailingToken != "" {
-		sanitized := nonAlphanumericRegex.ReplaceAllString(trailingToken, "_")
-		upperToken := strings.ToUpper(sanitized)
-		
-		if upperToken == "EMBEDDING" || upperToken == "EMBED" {
-			return envutil.GetEmbeddingModel()
-		}
-
-		envKey := fmt.Sprintf("MODEL_ROUTE_%s", upperToken)
-		return envutil.MustGetString(envKey)
+	if trailingToken == "" {
+		return envutil.MustGetString("MODEL_ROUTE_DEFAULT")
 	}
 
-	return envutil.MustGetString("MODEL_ROUTE_DEFAULT")
+	sanitized := nonAlphanumericRegex.ReplaceAllString(trailingToken, "_")
+	upperToken := strings.ToUpper(sanitized)
+
+	if upperToken == "EMBEDDING" || upperToken == "EMBED" {
+		return envutil.GetEmbeddingModel()
+	}
+
+	envKey := fmt.Sprintf("MODEL_ROUTE_%s", upperToken)
+	return envutil.MustGetString(envKey)
 }

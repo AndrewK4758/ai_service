@@ -1,0 +1,267 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	pb "github.com/AndrewK4758/shared_protos"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/protobuf/proto"
+)
+
+func init() {
+	os.Setenv("WORKER_ACK_WAIT", "1m")
+	os.Setenv("NATS_RATE_LIMIT_DELAY", "500ms")
+	os.Setenv("NATS_NACK_ERROR_TIMEOUT", "1s")
+	os.Setenv("NATS_REPLY_DELAY", "10ms")
+	os.Setenv("NATS_RESPONSE_STREAM", "WORKFLOW_RESPONSES")
+	os.Setenv("SERVICE_NAME", "ai_service")
+	os.Setenv("MODEL_ROUTE_DEFAULT", "model-default-v0")
+	os.Setenv("MODEL_ROUTE_SUBJECT", "worker.ai.inference")
+}
+
+// TestAdversarial_AIService_ModelResolutionAndVisionRoutingEdgeCases tests edge cases in subject parsing & vision detection.
+func TestAdversarial_AIService_ModelResolutionAndVisionRoutingEdgeCases(t *testing.T) {
+	t.Setenv("MODEL_ROUTE_DEFAULT", "default-model-v1")
+	t.Setenv("MODEL_ROUTE_INFERENCE", "inference-model-v2")
+	t.Setenv("MODEL_ROUTE_OCR", "ocr-model-v3")
+	t.Setenv("MODEL_EMBEDDING", "text-embedding-3-small")
+	t.Setenv("MODEL_ROUTE_CUSTOM_STEP", "custom-model-v4")
+	t.Setenv("MODEL_ROUTE_FALLBACK", "fallback-model-v5")
+
+	server := &NatsServer{}
+
+	t.Run("resolveModelID Edge Cases", func(t *testing.T) {
+		tests := []struct {
+			subject  string
+			expected string
+		}{
+			{"", "default-model-v1"},
+			{"   ", "default-model-v1"},
+			{"...", "default-model-v1"},
+			{"worker.ai.inference", "inference-model-v2"},
+			{"worker.ai.ocr", "ocr-model-v3"},
+			{"worker.ai.embed", "text-embedding-3-small"},
+			{"worker.ai.embedding", "text-embedding-3-small"},
+			{"worker.ai.custom-step", "custom-model-v4"},
+			{"worker.ai.fallback", "fallback-model-v5"},
+		}
+
+		for _, tt := range tests {
+			got := server.resolveModelID(tt.subject)
+			if got != tt.expected {
+				t.Errorf("resolveModelID(%q) = %q; want %q", tt.subject, got, tt.expected)
+			}
+		}
+	})
+
+	t.Run("isVisionRequest Edge Cases", func(t *testing.T) {
+		tests := []struct {
+			subj     string
+			modelID  string
+			ext      string
+			expected bool
+		}{
+			{"worker.ai.vision", "any-model", ".txt", true},
+			{"worker.ai.ocr", "any-model", ".pdf", true},
+			{"worker.ai.image", "any-model", ".pdf", true},
+			{"worker.ai.text", "gpt-4o", ".txt", true},
+			{"worker.ai.text", "claude-3-opus", ".txt", true},
+			{"worker.ai.text", "standard-model", ".png", true},
+			{"worker.ai.text", "standard-model", ".jpg", true},
+			{"worker.ai.text", "standard-model", ".jpeg", true},
+			{"worker.ai.text", "standard-model", ".webp", true},
+			{"worker.ai.text", "standard-model", ".tiff", true},
+			{"worker.ai.text", "standard-model", ".bmp", true},
+			{"worker.ai.text", "standard-model", ".pdf", false},
+			{"worker.ai.text", "standard-model", ".docx", false},
+			{"worker.ai.text", "standard-model", ".txt", false},
+		}
+
+		for _, tt := range tests {
+			got := isVisionRequest(tt.subj, tt.modelID, tt.ext)
+			if got != tt.expected {
+				t.Errorf("isVisionRequest(%q, %q, %q) = %v; want %v", tt.subj, tt.modelID, tt.ext, got, tt.expected)
+			}
+		}
+	})
+}
+
+// TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths verifies exact error context formatting.
+func TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths(t *testing.T) {
+	t.Run("NACK / Error Reply Context Enrichment", func(t *testing.T) {
+		js := &resiliencyCapturingJS{}
+		analyzer := &mockAnalyzerWithErr{err: fmt.Errorf("invalid prompt format")}
+		mockStore := &workingStore{data: []byte("sample content")}
+
+		server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1)
+
+		hdr := make(nats.Header)
+		hdr.Set("Reply-Subject", "test.reply.adv")
+
+		req := &pb.ExecuteWorkflowNodeRequest{
+			Identity: &pb.InfrastructureIdentity{TenantId: "t_adv", AppId: "a_adv", JobId: "j_adv"},
+			Storage:  &pb.StorageContract{DocumentUri: "internal-store://t_adv/a_adv/j_adv/doc.txt"},
+			StepId:   "ADV_AI_STEP",
+		}
+		data, _ := proto.Marshal(req)
+
+		msg := &mockMsg{
+			data:    data,
+			headers: hdr,
+			metadata: &jetstream.MsgMetadata{
+				NumDelivered: 1,
+			},
+		}
+
+		server.processMessage(context.Background(), msg)
+
+		js.mu.Lock()
+		pubData := js.lastPublishedData
+		js.mu.Unlock()
+
+		if pubData == nil {
+			t.Fatalf("expected error reply to be published")
+		}
+
+		resp := &pb.PerformActionResponse{}
+		if err := proto.Unmarshal(pubData, resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if resp.ErrorContract == nil {
+			t.Fatalf("expected ErrorContract to be populated")
+		}
+
+		expectedPrefix := "[Step: ADV_AI_STEP, URI: internal-store://t_adv/a_adv/j_adv/doc.txt]"
+		if !strings.HasPrefix(resp.ErrorContract.Message, expectedPrefix) {
+			t.Errorf("error contract message does not start with expected prefix %q, got: %q", expectedPrefix, resp.ErrorContract.Message)
+		}
+		if resp.ErrorContract.Source != "ai_service" {
+			t.Errorf("expected source 'ai_service', got %q", resp.ErrorContract.Source)
+		}
+		if resp.ErrorContract.Code != "AI_PROCESSING_FAILED" {
+			t.Errorf("expected code 'AI_PROCESSING_FAILED', got %q", resp.ErrorContract.Code)
+		}
+	})
+}
+
+// TestAdversarial_AIService_JITByteDiscardAndMemoryAudit stress tests JIT memory discarding.
+func TestAdversarial_AIService_JITByteDiscardAndMemoryAudit(t *testing.T) {
+	js := &resiliencyCapturingJS{}
+	analyzer := &memoryAuditAnalyzer{}
+
+	payloadSize := 5 * 1024 * 1024 // 5MB
+	bigPayload := make([]byte, payloadSize)
+	for i := range bigPayload {
+		bigPayload[i] = 'Z'
+	}
+
+	store := &memoryAuditStorage{payload: bigPayload}
+	server := NewNatsServer(nil, js, analyzer, store, 10, "test", 10, 10)
+
+	runtime.GC()
+	var mBefore runtime.MemStats
+	runtime.ReadMemStats(&mBefore)
+
+	// Run 20 sequential JIT fetches of 5MB files
+	for i := 0; i < 20; i++ {
+		req := &pb.ExecuteWorkflowNodeRequest{
+			Identity: &pb.InfrastructureIdentity{
+				TenantId: "t_mem",
+				AppId:    "a_mem",
+				JobId:    fmt.Sprintf("j_mem_%d", i),
+			},
+			Storage: &pb.StorageContract{
+				DocumentUri: fmt.Sprintf("internal-store://t_mem/a_mem/j_mem_%d/bigfile.txt", i),
+			},
+			StepId: "JIT_MEMORY_STEP",
+		}
+		data, _ := proto.Marshal(req)
+		hdr := make(nats.Header)
+		hdr.Set("Reply-Subject", "test.reply.mem")
+
+		msg := &mockMsg{
+			data:    data,
+			headers: hdr,
+			metadata: &jetstream.MsgMetadata{
+				NumDelivered: 1,
+			},
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		server.processMessage(ctx, msg)
+		cancel()
+	}
+
+	runtime.GC()
+	var mAfter runtime.MemStats
+	runtime.ReadMemStats(&mAfter)
+
+	analyzer.mu.Lock()
+	callCount := analyzer.callCount
+	analyzer.mu.Unlock()
+
+	if callCount != 20 {
+		t.Errorf("expected 20 analyzer calls, got %d", callCount)
+	}
+}
+
+// TestAdversarial_AIService_HighConcurrencyStress 100 parallel workers under race detector.
+func TestAdversarial_AIService_HighConcurrencyStress(t *testing.T) {
+	js := &mockJS{}
+	analyzer := &memoryAuditAnalyzer{}
+	store := &memoryAuditStorage{payload: []byte("adversarial race test payload")}
+	server := NewNatsServer(nil, js, analyzer, store, 20, "test", 20, 20)
+
+	concurrency := 100
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		go func(id int) {
+			defer wg.Done()
+
+			req := &pb.ExecuteWorkflowNodeRequest{
+				Identity: &pb.InfrastructureIdentity{
+					TenantId: "t_race",
+					AppId:    "a_race",
+					JobId:    fmt.Sprintf("j_race_%d", id),
+				},
+				Storage: &pb.StorageContract{
+					DocumentUri: fmt.Sprintf("internal-store://t_race/a_race/j_race_%d/doc.txt", id),
+				},
+				StepId: fmt.Sprintf("STEP_RACE_%d", id),
+			}
+
+			data, _ := proto.Marshal(req)
+			msg := &mockMsg{
+				data: data,
+				metadata: &jetstream.MsgMetadata{
+					NumDelivered: 1,
+				},
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			server.processMessage(ctx, msg)
+		}(i)
+	}
+
+	wg.Wait()
+
+	analyzer.mu.Lock()
+	defer analyzer.mu.Unlock()
+
+	if analyzer.callCount != concurrency {
+		t.Errorf("expected %d analyzer calls under concurrent stress, got %d", concurrency, analyzer.callCount)
+	}
+}

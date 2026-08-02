@@ -1,10 +1,10 @@
 package server
 
 import (
-	"os"
-
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -98,7 +98,7 @@ func (m *failingMockJS) Publish(ctx context.Context, subj string, data []byte, o
 func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &mockAnalyzer{err: fmt.Errorf("429 Too Many Requests")}
-	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1)
 
 	req := &pb.ExecuteWorkflowNodeRequest{}
 	data, _ := proto.Marshal(req)
@@ -133,7 +133,7 @@ func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 func TestNatsServer_processMessage_MaxRetries(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &mockAnalyzer{err: fmt.Errorf("429 Too Many Requests")}
-	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1)
 
 	req := &pb.ExecuteWorkflowNodeRequest{}
 	data, _ := proto.Marshal(req)
@@ -161,7 +161,7 @@ func TestNatsServer_processMessage_MaxRetries(t *testing.T) {
 func TestNatsServer_processMessage_PoisonPill(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &mockAnalyzer{}
-	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1)
 
 	// Invalid protobuf
 	msg := &mockMsg{
@@ -187,7 +187,7 @@ func TestNatsServer_processMessage_PoisonPill(t *testing.T) {
 func TestNatsServer_processMessage_PoisonPill_SendErrorReplyFails(t *testing.T) {
 	js := &failingMockJS{}
 	analyzer := &mockAnalyzer{}
-	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1)
 
 	hdr := make(nats.Header)
 	hdr.Set("Reply-Subject", "test.reply.subject")
@@ -220,7 +220,7 @@ func TestNatsServer_processMessage_PoisonPill_SendErrorReplyFails(t *testing.T) 
 func TestNatsServer_processMessage_NonRetryableAIError(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &mockAnalyzer{err: fmt.Errorf("400 Bad Request: invalid parameter count")}
-	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1)
 
 	req := &pb.ExecuteWorkflowNodeRequest{}
 	data, _ := proto.Marshal(req)
@@ -251,7 +251,7 @@ func TestNatsServer_processMessage_NonRetryableAIError(t *testing.T) {
 func TestNatsServer_processMessage_NonRetryableAIError_SendErrorReplyFails(t *testing.T) {
 	js := &failingMockJS{}
 	analyzer := &mockAnalyzer{err: fmt.Errorf("400 Bad Request: invalid prompt")}
-	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1)
 
 	hdr := make(nats.Header)
 	hdr.Set("Reply-Subject", "test.reply.subject")
@@ -286,7 +286,7 @@ func TestNatsServer_processMessage_NonRetryableAIError_SendErrorReplyFails(t *te
 func TestNatsServer_processMessage_ContextCanceled(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &mockAnalyzer{}
-	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1)
 
 	req := &pb.ExecuteWorkflowNodeRequest{}
 	data, _ := proto.Marshal(req)
@@ -313,7 +313,6 @@ func TestNatsServer_processMessage_ContextCanceled(t *testing.T) {
 		t.Errorf("expected msg NOT to be terminated when context is canceled")
 	}
 }
-
 
 func TestNatsServer_ResolveModelID(t *testing.T) {
 	t.Setenv("MODEL_ROUTE_CHUNKING", "model-chunking-v1")
@@ -347,14 +346,12 @@ func TestNatsServer_ResolveModelID(t *testing.T) {
 			}
 		})
 	}
-
-
 }
 
 func TestNatsServer_processMessage_WithNativeIdentity(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &mockAnalyzer{}
-	server := NewNatsServer(nil, js, analyzer, 1, "test", 1, 1)
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1)
 
 	req := &pb.ExecuteWorkflowNodeRequest{
 		Identity: &pb.InfrastructureIdentity{
@@ -407,15 +404,12 @@ func TestNatsServer_ConcurrencySemaphoreAndCancellation(t *testing.T) {
 		}
 	}()
 
-	// Give goroutine time to block on semaphore
 	time.Sleep(10 * time.Millisecond)
 
-	// Cancel context while goroutine is waiting
 	cancel()
 
 	select {
 	case <-nakCalled:
-		// Success: goroutine unblocked and NAK'd message
 	case <-time.After(1 * time.Second):
 		t.Fatalf("expected message to be NAK'd on context cancellation when semaphore is full")
 	}
@@ -427,7 +421,294 @@ func TestNatsServer_ConcurrencySemaphoreAndCancellation(t *testing.T) {
 	}
 }
 
+// --- JIT FETCH AND RESILIENCY TESTS ---
 
+type mockStorageManager struct {
+	fileBytes []byte
+	err       error
+	called    bool
+	lastUri   string
+}
+
+func (m *mockStorageManager) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) ([]byte, error) {
+	m.called = true
+	m.lastUri = relativePath
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.fileBytes, nil
+}
+
+func (m *mockStorageManager) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data []byte) (string, error) {
+	return relativePath, nil
+}
+
+type trackingAnalyzer struct {
+	textCalled  bool
+	imageCalled bool
+	lastText    string
+	lastImages  [][]byte
+	err         error
+}
+
+func (m *trackingAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+	m.textCalled = true
+	m.lastText = text
+	return `{"result":"success"}`, m.err
+}
+
+func (m *trackingAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+	m.imageCalled = true
+	m.lastImages = imageBytes
+	return `{"result":"success"}`, m.err
+}
+
+func (m *trackingAnalyzer) GenerateEmbedding(ctx context.Context, text string, modelID string) ([]float32, error) {
+	return []float32{}, m.err
+}
+
+func TestNatsServer_JITFetch_PdfTextExtraction_Success(t *testing.T) {
+	js := &mockJS{}
+	analyzer := &trackingAnalyzer{}
+	mockStore := &mockStorageManager{
+		fileBytes: []byte("sample text file content"),
+	}
+	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1)
+
+	req := &pb.ExecuteWorkflowNodeRequest{
+		Identity: &pb.InfrastructureIdentity{
+			TenantId: "t1",
+			AppId:    "a1",
+			JobId:    "j1",
+		},
+		Storage: &pb.StorageContract{
+			DocumentUri: "internal-store://t1/a1/j1/document.txt",
+		},
+		StepId: "TEXT_PARSE_STEP",
+	}
+	data, _ := proto.Marshal(req)
+
+	msg := &mockMsg{
+		data: data,
+		metadata: &jetstream.MsgMetadata{
+			NumDelivered: 1,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server.processMessage(ctx, msg)
+
+	if !mockStore.called {
+		t.Errorf("expected storage manager FetchFile to be called")
+	}
+	if mockStore.lastUri != "internal-store://t1/a1/j1/document.txt" {
+		t.Errorf("expected URI internal-store://t1/a1/j1/document.txt, got %s", mockStore.lastUri)
+	}
+	if !analyzer.textCalled {
+		t.Errorf("expected AnalyzeText to be called for text file JIT fetch")
+	}
+	if analyzer.lastText != "sample text file content" {
+		t.Errorf("expected text 'sample text file content', got '%s'", analyzer.lastText)
+	}
+}
+
+func TestNatsServer_JITFetch_RawImage_Success(t *testing.T) {
+	js := &mockJS{}
+	analyzer := &trackingAnalyzer{}
+	mockStore := &mockStorageManager{
+		fileBytes: []byte("fake_image_bytes"),
+	}
+	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1)
+
+	req := &pb.ExecuteWorkflowNodeRequest{
+		Identity: &pb.InfrastructureIdentity{
+			TenantId: "t1",
+			AppId:    "a1",
+			JobId:    "j1",
+		},
+		Storage: &pb.StorageContract{
+			DocumentUri: "internal-store://t1/a1/j1/photo.png",
+		},
+		StepId: "VISION_STEP",
+	}
+	data, _ := proto.Marshal(req)
+
+	msg := &mockMsg{
+		data: data,
+		metadata: &jetstream.MsgMetadata{
+			NumDelivered: 1,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server.processMessage(ctx, msg)
+
+	if !mockStore.called {
+		t.Errorf("expected storage manager FetchFile to be called")
+	}
+	if !analyzer.imageCalled {
+		t.Errorf("expected AnalyzeImage to be called for PNG image")
+	}
+	if len(analyzer.lastImages) != 1 || string(analyzer.lastImages[0]) != "fake_image_bytes" {
+		t.Errorf("expected image bytes 'fake_image_bytes', got %v", analyzer.lastImages)
+	}
+}
+
+type capturingJS struct {
+	jetstream.JetStream
+	lastPublishedData []byte
+}
+
+func (c *capturingJS) Publish(ctx context.Context, subj string, data []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
+	c.lastPublishedData = data
+	return &jetstream.PubAck{}, nil
+}
+
+func TestNatsServer_JITFetch_StorageGatewayDown_EnrichedError(t *testing.T) {
+	js := &capturingJS{}
+	analyzer := &mockAnalyzer{}
+	mockStore := &mockStorageManager{
+		err: fmt.Errorf("connection refused"),
+	}
+	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1)
+
+	hdr := make(nats.Header)
+	hdr.Set("Reply-Subject", "test.reply.subject")
+
+	req := &pb.ExecuteWorkflowNodeRequest{
+		Identity: &pb.InfrastructureIdentity{
+			TenantId: "t1",
+			AppId:    "a1",
+			JobId:    "j1",
+		},
+		Storage: &pb.StorageContract{
+			DocumentUri: "internal-store://t1/a1/j1/document.pdf",
+		},
+		StepId: "FETCH_STEP",
+	}
+	data, _ := proto.Marshal(req)
+
+	msg := &mockMsg{
+		data:    data,
+		headers: hdr,
+		metadata: &jetstream.MsgMetadata{
+			NumDelivered: 1,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server.processMessage(ctx, msg)
+
+	if js.lastPublishedData == nil {
+		t.Fatalf("expected error reply to be published")
+	}
+
+	resp := &pb.PerformActionResponse{}
+	if err := proto.Unmarshal(js.lastPublishedData, resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if resp.Success {
+		t.Errorf("expected response success to be false")
+	}
+	if resp.ErrorContract == nil {
+		t.Fatalf("expected ErrorContract to be populated")
+	}
+	if resp.ErrorContract.Code != "STORAGE_FETCH_FAILED" {
+		t.Errorf("expected error code STORAGE_FETCH_FAILED, got %s", resp.ErrorContract.Code)
+	}
+	expectedMsgPrefix := "[Step: FETCH_STEP, URI: internal-store://t1/a1/j1/document.pdf]"
+	if !strings.HasPrefix(resp.ErrorContract.Message, expectedMsgPrefix) {
+		t.Errorf("expected error message to start with %q, got %q", expectedMsgPrefix, resp.ErrorContract.Message)
+	}
+}
+
+func TestNatsServer_ErrorContract_ContextFormatting_TableDriven(t *testing.T) {
+	tests := []struct {
+		name               string
+		req                *pb.ExecuteWorkflowNodeRequest
+		storeErr           error
+		analyzerErr        error
+		expectedCode       string
+		expectedStepInMsg  string
+		expectedUriInMsg   string
+	}{
+		{
+			name: "Storage fetch failure",
+			req: &pb.ExecuteWorkflowNodeRequest{
+				Storage: &pb.StorageContract{DocumentUri: "internal-store://doc.pdf"},
+				StepId:          "STEP_FETCH",
+			},
+			storeErr:          fmt.Errorf("storage offline"),
+			expectedCode:      "STORAGE_FETCH_FAILED",
+			expectedStepInMsg: "STEP_FETCH",
+			expectedUriInMsg:  "internal-store://doc.pdf",
+		},
+		{
+			name: "AI analysis failure with URI",
+			req: &pb.ExecuteWorkflowNodeRequest{
+				Storage: &pb.StorageContract{DocumentUri: "internal-store://doc.txt"},
+				StepId:          "STEP_AI",
+			},
+			analyzerErr:       fmt.Errorf("model error"),
+			expectedCode:      "AI_PROCESSING_FAILED",
+			expectedStepInMsg: "STEP_AI",
+			expectedUriInMsg:  "internal-store://doc.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			js := &capturingJS{}
+			analyzer := &mockAnalyzer{err: tt.analyzerErr}
+			mockStore := &mockStorageManager{err: tt.storeErr, fileBytes: []byte("sample")}
+			server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1)
+
+			hdr := make(nats.Header)
+			hdr.Set("Reply-Subject", "test.reply.subject")
+
+			data, _ := proto.Marshal(tt.req)
+			msg := &mockMsg{
+				data:    data,
+				headers: hdr,
+				metadata: &jetstream.MsgMetadata{
+					NumDelivered: 1,
+				},
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			server.processMessage(ctx, msg)
+
+			if js.lastPublishedData == nil {
+				t.Fatalf("expected error reply to be published")
+			}
+
+			resp := &pb.PerformActionResponse{}
+			if err := proto.Unmarshal(js.lastPublishedData, resp); err != nil {
+				t.Fatalf("failed to unmarshal response: %v", err)
+			}
+
+			if resp.ErrorContract == nil {
+				t.Fatalf("expected ErrorContract to be present")
+			}
+			if resp.ErrorContract.Code != tt.expectedCode {
+				t.Errorf("expected error code %s, got %s", tt.expectedCode, resp.ErrorContract.Code)
+			}
+			expectedSub := fmt.Sprintf("[Step: %s, URI: %s]", tt.expectedStepInMsg, tt.expectedUriInMsg)
+			if !strings.Contains(resp.ErrorContract.Message, expectedSub) {
+				t.Errorf("expected error message to contain %q, got %q", expectedSub, resp.ErrorContract.Message)
+			}
+		})
+	}
+}
 
 func init() {
 	os.Setenv("WORKER_ACK_WAIT", "1m")

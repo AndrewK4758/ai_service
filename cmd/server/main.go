@@ -16,8 +16,12 @@ import (
 
 	"ai_service/internal/ai"
 	"ai_service/internal/server"
+	"ai_service/internal/storage"
 
+	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -127,6 +131,10 @@ func main() {
 	config.BaseURL = aiHost
 	config.TextModel = aiTextModel
 	config.VisionModel = aiVisionModel
+	visionBaseURL := envutil.MustGetString("OPENAI_VISION_BASE_URL")
+	if visionBaseURL != "" {
+		config.VisionBaseURL = visionBaseURL
+	}
 	config.EmbeddingModel = aiEmbeddingModel
 	config.Temperature = float32(temperature)
 	config.MaxTokens = maxTokens
@@ -154,9 +162,24 @@ func main() {
 		logger.Fatal("AI_Service", "failed to initialize AI analyzer: %v", err)
 	}
 
-	natsServer := server.NewNatsServer(nc, js, analyzer, workerPoolSize, queueFilter, maxAckPending, pullMaxMessages)
+	gatewayAddr := envutil.MustGetString("STORAGE_GATEWAY_ADDR")
+	if gatewayAddr == "" {
+		gatewayAddr = "localhost:50051"
+	}
+	gatewayConn, err := grpc.NewClient(gatewayAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Fatal("AI_Service", "failed to dial storage_gateway: %v", err)
+	}
+	defer gatewayConn.Close()
+	store := storage.NewGatewayStorage(pb.NewStorageGatewayServiceClient(gatewayConn))
 
-	logger.Info("AI_Service", "AI Engine: OpenAI Spec | Host: %s | Text: %s | Vision: %s | Embed: %s | Chunking: %s | Inference: %s | Extraction: %s", aiHost, aiTextModel, aiVisionModel, aiEmbeddingModel, chunkingRoute, inferenceRoute, extractionRoute)
+	natsServer := server.NewNatsServer(nc, js, analyzer, store, workerPoolSize, queueFilter, maxAckPending, pullMaxMessages)
+
+	visionHost := aiHost
+	if visionBaseURL != "" {
+		visionHost = visionBaseURL
+	}
+	logger.Info("AI_Service", "AI Engine: OpenAI Spec | Host: %s | Text: %s | Vision: %s (Host: %s) | Embed: %s | Chunking: %s | Inference: %s | Extraction: %s", aiHost, aiTextModel, aiVisionModel, visionHost, aiEmbeddingModel, chunkingRoute, inferenceRoute, extractionRoute)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
