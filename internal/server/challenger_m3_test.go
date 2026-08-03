@@ -65,7 +65,7 @@ func TestChallenger_NatsServer_ErrorContractFormat_Comprehensive(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			js := &resiliencyCapturingJS{}
 			analyzer := &mockAnalyzerWithErr{err: tt.analyzerErr}
-			server := NewNatsServer(nil, js, analyzer, tt.store, 1, "test", 1, 1)
+			server := NewNatsServer(nil, js, analyzer, tt.store, 1, "test", 1, 1, 8192)
 
 			hdr := make(nats.Header)
 			hdr.Set("Reply-Subject", "test.reply.err")
@@ -165,7 +165,7 @@ func TestChallenger_NatsServer_ConcurrentProcessingStress(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &memoryAuditAnalyzer{}
 	store := &workingStore{data: []byte("concurrent test payload")}
-	server := NewNatsServer(nil, js, analyzer, store, 20, "test", 20, 20)
+	server := NewNatsServer(nil, js, analyzer, store, 20, "test", 20, 20, 8192)
 
 	concurrency := 100
 	var wg sync.WaitGroup

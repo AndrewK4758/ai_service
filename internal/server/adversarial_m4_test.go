@@ -101,7 +101,7 @@ func TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths(t *testin
 		analyzer := &mockAnalyzerWithErr{err: fmt.Errorf("invalid prompt format")}
 		mockStore := &workingStore{data: []byte("sample content")}
 
-		server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1)
+		server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1, 8192)
 
 		hdr := make(nats.Header)
 		hdr.Set("Reply-Subject", "test.reply.adv")
@@ -165,7 +165,7 @@ func TestAdversarial_AIService_JITByteDiscardAndMemoryAudit(t *testing.T) {
 	}
 
 	store := &memoryAuditStorage{payload: bigPayload}
-	server := NewNatsServer(nil, js, analyzer, store, 10, "test", 10, 10)
+	server := NewNatsServer(nil, js, analyzer, store, 10, "test", 10, 10, 0)
 
 	runtime.GC()
 	var mBefore runtime.MemStats
@@ -219,7 +219,7 @@ func TestAdversarial_AIService_HighConcurrencyStress(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &memoryAuditAnalyzer{}
 	store := &memoryAuditStorage{payload: []byte("adversarial race test payload")}
-	server := NewNatsServer(nil, js, analyzer, store, 20, "test", 20, 20)
+	server := NewNatsServer(nil, js, analyzer, store, 20, "test", 20, 20, 8192)
 
 	concurrency := 100
 	var wg sync.WaitGroup

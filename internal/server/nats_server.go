@@ -30,26 +30,28 @@ import (
 )
 
 type NatsServer struct {
-	nc              *nats.Conn
-	js              jetstream.JetStream
-	analyzer        ai.Analyzer
-	store           storage.Manager
-	workerPoolSize  int
-	queueFilter     string
-	maxAckPending   int
-	pullMaxMessages int
+	nc                *nats.Conn
+	js                jetstream.JetStream
+	analyzer          ai.Analyzer
+	store             storage.Manager
+	workerPoolSize    int
+	queueFilter       string
+	maxAckPending     int
+	pullMaxMessages   int
+	maxDocumentTokens int
 }
 
-func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, store storage.Manager, workerPoolSize int, queueFilter string, maxAckPending int, pullMaxMessages int) *NatsServer {
+func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, store storage.Manager, workerPoolSize int, queueFilter string, maxAckPending int, pullMaxMessages int, maxDocumentTokens int) *NatsServer {
 	return &NatsServer{
-		nc:              nc,
-		js:              js,
-		analyzer:        analyzer,
-		store:           store,
-		workerPoolSize:  workerPoolSize,
-		queueFilter:     queueFilter,
-		maxAckPending:   maxAckPending,
-		pullMaxMessages: pullMaxMessages,
+		nc:                nc,
+		js:                js,
+		analyzer:          analyzer,
+		store:             store,
+		workerPoolSize:    workerPoolSize,
+		queueFilter:       queueFilter,
+		maxAckPending:     maxAckPending,
+		pullMaxMessages:   pullMaxMessages,
+		maxDocumentTokens: maxDocumentTokens,
 	}
 }
 
@@ -198,7 +200,18 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	if targetSubj == "" {
 		targetSubj = msg.Subject()
 	}
-	modelID := s.resolveModelID(targetSubj)
+
+	isScanned, hasFlag := extractIsScannedFlag(parser)
+	var modelID string
+	if hasFlag {
+		if isScanned {
+			modelID = envutil.MustGetString("OPENAI_VISION_MODEL")
+		} else {
+			modelID = envutil.MustGetString("OPENAI_TEXT_MODEL")
+		}
+	} else {
+		modelID = s.resolveModelID(targetSubj)
+	}
 
 	result, errCode, err := s.executeAction(ctx, parser, targetSubj, modelID)
 	if err != nil {
@@ -329,9 +342,62 @@ func (s *NatsServer) processDocumentJIT(ctx context.Context, docUri string, pars
 	return s.dispatchBytesToAnalyzer(ctx, fileBytes, docUri, parser, modelID, targetSubj)
 }
 
+func EstimateDocumentTokens(text string, images [][]byte) int {
+	tokens := 0
+	if len(text) > 0 {
+		tokens += (len(text) + 3) / 4
+	}
+	if len(images) > 0 {
+		tokens += len(images) * 765
+	}
+	return tokens
+}
+
+func (s *NatsServer) checkDocumentTokenLimit(text string, images [][]byte, step string, docUri string) (string, error) {
+	if s.maxDocumentTokens <= 0 {
+		return "", nil
+	}
+	tokenCount := EstimateDocumentTokens(text, images)
+	if tokenCount <= s.maxDocumentTokens {
+		return "", nil
+	}
+	return "LARGE_DOCUMENT_EXCEEDED", fmt.Errorf("[Step: %s, URI: %s] document token count (%d) exceeds max token limit (%d)", step, docUri, tokenCount, s.maxDocumentTokens)
+}
+
+func (s *NatsServer) analyzeTextWithTokenCheck(ctx context.Context, text string, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+	if errCode, tokenErr := s.checkDocumentTokenLimit(text, nil, step, docUri); tokenErr != nil {
+		return "", errCode, tokenErr
+	}
+	res, analyzeErr := s.analyzer.AnalyzeText(ctx, text, parser, nil, modelID)
+	if analyzeErr != nil {
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
+	}
+	return res, "", nil
+}
+
+func (s *NatsServer) analyzeImageWithTokenCheck(ctx context.Context, images [][]byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+	if errCode, tokenErr := s.checkDocumentTokenLimit("", images, step, docUri); tokenErr != nil {
+		return "", errCode, tokenErr
+	}
+	res, analyzeErr := s.analyzer.AnalyzeImage(ctx, images, parser, nil, modelID)
+	if analyzeErr != nil {
+		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
+	}
+	return res, "", nil
+}
+
 func (s *NatsServer) dispatchBytesToAnalyzer(ctx context.Context, fileBytes []byte, docUri string, parser *workflowparser.NodeRequestParser, modelID string, targetSubj string) (string, string, error) {
 	step := getStepName(parser)
 	ext := strings.ToLower(filepath.Ext(docUri))
+
+	isScanned, hasFlag := extractIsScannedFlag(parser)
+	if hasFlag && ext == ".pdf" {
+		if isScanned {
+			return s.processPdfVisionBytes(ctx, fileBytes, step, docUri, parser, modelID)
+		}
+		return s.processPdfTextBytes(ctx, fileBytes, step, docUri, parser, modelID)
+	}
+
 	isVision := isVisionRequest(targetSubj, modelID, ext)
 
 	if isVision {
@@ -348,11 +414,7 @@ func (s *NatsServer) dispatchBytesToAnalyzer(ctx context.Context, fileBytes []by
 
 	text := string(fileBytes)
 	fileBytes = nil
-	res, err := s.analyzer.AnalyzeText(ctx, text, parser, nil, modelID)
-	if err != nil {
-		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, err)
-	}
-	return res, "", nil
+	return s.analyzeTextWithTokenCheck(ctx, text, step, docUri, parser, modelID)
 }
 
 func (s *NatsServer) processVisionBytes(ctx context.Context, fileBytes []byte, ext string, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
@@ -368,23 +430,13 @@ func (s *NatsServer) processPdfVisionBytes(ctx context.Context, fileBytes []byte
 	if err != nil {
 		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] pdftoppm failed: %w", step, docUri, err)
 	}
-	res, analyzeErr := s.analyzer.AnalyzeImage(ctx, images, parser, nil, modelID)
-	images = nil
-	if analyzeErr != nil {
-		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
-	}
-	return res, "", nil
+	return s.analyzeImageWithTokenCheck(ctx, images, step, docUri, parser, modelID)
 }
 
 func (s *NatsServer) processRawImageBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
 	images := [][]byte{fileBytes}
 	fileBytes = nil
-	res, analyzeErr := s.analyzer.AnalyzeImage(ctx, images, parser, nil, modelID)
-	images = nil
-	if analyzeErr != nil {
-		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
-	}
-	return res, "", nil
+	return s.analyzeImageWithTokenCheck(ctx, images, step, docUri, parser, modelID)
 }
 
 func (s *NatsServer) processPdfTextBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
@@ -393,11 +445,7 @@ func (s *NatsServer) processPdfTextBytes(ctx context.Context, fileBytes []byte, 
 	if err != nil {
 		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] pdftotext failed: %w", step, docUri, err)
 	}
-	res, analyzeErr := s.analyzer.AnalyzeText(ctx, text, parser, nil, modelID)
-	if analyzeErr != nil {
-		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
-	}
-	return res, "", nil
+	return s.analyzeTextWithTokenCheck(ctx, text, step, docUri, parser, modelID)
 }
 
 func (s *NatsServer) processDocxTextBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
@@ -406,11 +454,7 @@ func (s *NatsServer) processDocxTextBytes(ctx context.Context, fileBytes []byte,
 	if err != nil {
 		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] docx extraction failed: %w", step, docUri, err)
 	}
-	res, analyzeErr := s.analyzer.AnalyzeText(ctx, text, parser, nil, modelID)
-	if analyzeErr != nil {
-		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
-	}
-	return res, "", nil
+	return s.analyzeTextWithTokenCheck(ctx, text, step, docUri, parser, modelID)
 }
 
 func getStepName(parser *workflowparser.NodeRequestParser) string {
@@ -449,16 +493,18 @@ func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg
 	logger.Info("AI_Service", "AI processing failed: %v", err)
 	errStr := strings.ToLower(err.Error())
 
-	isRateLimit := strings.Contains(errStr, "429") || strings.Contains(errStr, "too many requests") || strings.Contains(errStr, "throttlingexception") || strings.Contains(errStr, "quota")
-	if isRateLimit {
-		s.handleRateLimitError(msg, err, durableName, t, a, j, attempt, startTime)
-		return
-	}
+	if errCode != "LARGE_DOCUMENT_EXCEEDED" {
+		isRateLimit := strings.Contains(errStr, "429") || strings.Contains(errStr, "too many requests") || strings.Contains(errStr, "throttlingexception") || strings.Contains(errStr, "quota")
+		if isRateLimit {
+			s.handleRateLimitError(msg, err, durableName, t, a, j, attempt, startTime)
+			return
+		}
 
-	isTempError := strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "eof")
-	if isTempError {
-		s.handleTempError(msg, err, durableName, t, a, j, attempt, startTime)
-		return
+		isTempError := strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "eof")
+		if isTempError {
+			s.handleTempError(msg, err, durableName, t, a, j, attempt, startTime)
+			return
+		}
 	}
 
 	if errCode == "" {
@@ -722,4 +768,57 @@ func (s *NatsServer) resolveModelID(subject string) string {
 
 	envKey := fmt.Sprintf("MODEL_ROUTE_%s", upperToken)
 	return envutil.MustGetString(envKey)
+}
+
+func extractIsScannedFlag(parser *workflowparser.NodeRequestParser) (bool, bool) {
+	if parser == nil {
+		return false, false
+	}
+
+	keys := []string{"IsScanned", "is_scanned"}
+
+	meta := parser.GetMetadata()
+	for _, k := range keys {
+		v, ok := meta[k]
+		if !ok {
+			continue
+		}
+		if parsed, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			return parsed, true
+		}
+	}
+
+	funcState := parser.GetFunctionalState()
+	for _, k := range keys {
+		v, ok := funcState[k]
+		if !ok {
+			continue
+		}
+		if b, ok := v.(bool); ok {
+			return b, true
+		}
+		if s, ok := v.(string); ok {
+			if parsed, err := strconv.ParseBool(strings.TrimSpace(s)); err == nil {
+				return parsed, true
+			}
+		}
+	}
+
+	nonFuncState := parser.GetNonFunctionalState()
+	for _, k := range keys {
+		v, ok := nonFuncState[k]
+		if !ok {
+			continue
+		}
+		if b, ok := v.(bool); ok {
+			return b, true
+		}
+		if s, ok := v.(string); ok {
+			if parsed, err := strconv.ParseBool(strings.TrimSpace(s)); err == nil {
+				return parsed, true
+			}
+		}
+	}
+
+	return false, false
 }

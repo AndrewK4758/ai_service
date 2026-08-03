@@ -172,8 +172,8 @@ func main() {
 	}
 	defer gatewayConn.Close()
 	store := storage.NewGatewayStorage(pb.NewStorageGatewayServiceClient(gatewayConn))
-
-	natsServer := server.NewNatsServer(nc, js, analyzer, store, workerPoolSize, queueFilter, maxAckPending, pullMaxMessages)
+	maxDocTokens := envutil.GetIntOrDefault("LARGE_DOCUMENT_MAX_TOKENS", 8192)
+	natsServer := server.NewNatsServer(nc, js, analyzer, store, workerPoolSize, queueFilter, maxAckPending, pullMaxMessages, maxDocTokens)
 
 	visionHost := aiHost
 	if visionBaseURL != "" {

@@ -85,7 +85,7 @@ func TestResiliency_NatsServer_JITMemoryDiscarding(t *testing.T) {
 	}
 
 	store := &memoryAuditStorage{payload: largePayload}
-	server := NewNatsServer(nil, js, analyzer, store, 5, "test", 5, 5)
+	server := NewNatsServer(nil, js, analyzer, store, 5, "test", 5, 5, 0)
 
 	hdr := make(nats.Header)
 	hdr.Set("Reply-Subject", "test.reply.jit")
@@ -132,7 +132,7 @@ func TestResiliency_NatsServer_HighConcurrencyStress(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &memoryAuditAnalyzer{}
 	store := &memoryAuditStorage{payload: []byte("concurrent text payload")}
-	server := NewNatsServer(nil, js, analyzer, store, 10, "test", 10, 10)
+	server := NewNatsServer(nil, js, analyzer, store, 10, "test", 10, 10, 8192)
 
 	concurrency := 50
 	var wg sync.WaitGroup
@@ -201,7 +201,7 @@ func TestResiliency_ErrorFormatVerification(t *testing.T) {
 			js := &resiliencyCapturingJS{}
 			analyzer := &mockAnalyzer{}
 			store := &mockStorageManager{err: tt.storeErr}
-			server := NewNatsServer(nil, js, analyzer, store, 1, "test", 1, 1)
+			server := NewNatsServer(nil, js, analyzer, store, 1, "test", 1, 1, 8192)
 
 			hdr := make(nats.Header)
 			hdr.Set("Reply-Subject", "test.reply.err")
