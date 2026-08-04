@@ -6,11 +6,9 @@ import (
 	"github.com/AndrewK4758/shared_utils/envutil"
 
 	pb "github.com/AndrewK4758/shared_protos"
-	"github.com/AndrewK4758/shared_utils/logger"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
 )
 
-func buildPrompt(parser *workflowparser.NodeRequestParser, action *pb.ActionDefinition, documentContent string) string {
+func buildPrompt(req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, documentContent string) string {
 	basePrompt := envutil.MustGetString("OPENAI_BASE_PROMPT")
 
 	prompt := ""
@@ -18,23 +16,31 @@ func buildPrompt(parser *workflowparser.NodeRequestParser, action *pb.ActionDefi
 		prompt = basePrompt + "\n"
 	}
 
-	if parser != nil {
-		sysInstr := parser.GetSystemInstructions()
-		if sysInstr != "" {
-			prompt += fmt.Sprintf("\nGlobal Job Instructions:\n%s\n", sysInstr)
+	if req != nil && req.Payload != nil {
+		payloadMap := req.Payload.AsMap()
+		
+		// Extract System Instructions from Payload if provided by client
+		if sysInstrVal, ok := payloadMap["system_instructions"]; ok {
+			if sysInstrStr, isStr := sysInstrVal.(string); isStr && sysInstrStr != "" {
+				prompt += fmt.Sprintf("\nGlobal Job Instructions:\n%s\n", sysInstrStr)
+			}
 		}
 
-		schema := parser.GetExpectedSchema()
-		if schema != "" {
-			prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", schema)
+		// Extract Schema from Payload if provided by client
+		if schemaVal, ok := payloadMap["expected_schema"]; ok {
+			if schemaStr, isStr := schemaVal.(string); isStr && schemaStr != "" {
+				prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", schemaStr)
+			}
 		}
 
-		inputData, err := parser.GetInferenceInputData()
-		if err != nil {
-			logger.Info("AI_Service", "Could not extract inference input data: %v", err)
-		} else if inputData != "" {
-			inputKey := parser.GetInferenceInputKey()
-			prompt += fmt.Sprintf("\nInput Data (%s):\n%s\n", inputKey, inputData)
+		// Extract Inference Input from Payload
+		if infInputVal, ok := payloadMap["inference_input"]; ok {
+			if infInputStr, isStr := infInputVal.(string); isStr && infInputStr != "" {
+				if documentContent != "" {
+					documentContent += "\n\n"
+				}
+				documentContent += "Additional Input:\n" + infInputStr
+			}
 		}
 	}
 
@@ -44,6 +50,11 @@ func buildPrompt(parser *workflowparser.NodeRequestParser, action *pb.ActionDefi
 		}
 		if action.Prompt != "" {
 			prompt += fmt.Sprintf("\nTask Instructions:\n%s\n", action.Prompt)
+		}
+		for _, rule := range action.Rules {
+			if rule != "" {
+				prompt += fmt.Sprintf("- RULE: %s\n", rule)
+			}
 		}
 	}
 

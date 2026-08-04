@@ -10,7 +10,7 @@ import (
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
+
 )
 
 type VertexAnalyzer struct {
@@ -44,8 +44,8 @@ func NewVertexAnalyzer(config OpenAIConfig) (*VertexAnalyzer, error) {
 	}, nil
 }
 
-func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
-	prompt := buildPrompt(workflowCtx, action, text)
+func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+	prompt := buildPrompt(req, action, text)
 
 	m := modelID
 	if m == "" {
@@ -78,10 +78,10 @@ func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 	return "", fmt.Errorf("unexpected part type from vertex")
 }
 
-func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := envutil.MustGetString("DEFAULT_VISION_PROMPT")
-	if action != nil && workflowCtx != nil {
-		prompt = buildPrompt(workflowCtx, action, "")
+	if action != nil && req != nil {
+		prompt = buildPrompt(req, action, "")
 	}
 
 	m := modelID

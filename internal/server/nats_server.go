@@ -14,6 +14,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -21,10 +22,10 @@ import (
 	docparser "ai_service/internal/parser"
 	"ai_service/internal/storage"
 
+	"github.com/AndrewK4758/shared_utils/identityparser"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
 	"github.com/AndrewK4758/shared_utils/natsutil"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
 
 	pb "github.com/AndrewK4758/shared_protos"
 )
@@ -187,21 +188,74 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	logger.Info("AI_Service", "Received action request on subject: %s", msg.Subject())
 	replySubj := getReplySubject(msg)
 
-	req := &pb.ExecuteWorkflowNodeRequest{}
+	req := &pb.ExecuteTaskRequest{}
 	if err := proto.Unmarshal(msg.Data(), req); err != nil {
 		s.handleUnmarshalError(ctx, msg, replySubj, err, durableName, t, a, j, attempt, startTime)
 		return
 	}
 
-	parser := workflowparser.NewNodeRequestParser(req)
-	t, a, j = parser.ExtractIdentity()
-
-	targetSubj := parser.GetTargetWorkerSubject()
-	if targetSubj == "" {
-		targetSubj = msg.Subject()
+	if reqJson, err := protojson.Marshal(req); err == nil {
+		logger.Info("AI_Service", "[DEQUEUED PAYLOAD] Full ExecuteTaskRequest: %s", string(reqJson))
 	}
 
-	isScanned, hasFlag := extractIsScannedFlag(parser)
+	if req.Payload != nil {
+		logger.Info("Input payload", "%s: %+v", "payload", req.Payload.AsMap())
+	}
+
+	// Fail-Fast Assertion 1: Infrastructure Identity Validation
+	if err := identityparser.NewIdentityParser(req.GetIdentity()).Validate(true); err != nil {
+		logger.Error("AI_Service", "FAIL-FAST ASSERTION FAILED: invalid identity - %v", err)
+		if replySubj != "" {
+			_ = s.sendErrorReply(ctx, replySubj, err.Error(), "INVALID_IDENTITY")
+		}
+		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+			Component:  "AI_Service",
+			Event:      "TERMINATED",
+			Stream:     "WORKERS",
+			Subject:    msg.Subject(),
+			Consumer:   durableName,
+			TenantID:   t,
+			AppID:      a,
+			JobID:      j,
+			Attempt:    attempt,
+			DurationMs: time.Since(startTime).Milliseconds(),
+			Error:      err,
+		})
+		_ = msg.Term()
+		return
+	}
+
+	t = req.GetIdentity().GetTenantId()
+	a = req.GetIdentity().GetAppId()
+	j = req.GetIdentity().GetJobId()
+
+	// Fail-Fast Assertion 2: Required TaskSubject Validation
+	if req.GetTaskSubject() == "" {
+		err := fmt.Errorf("missing required TaskSubject")
+		logger.Error("AI_Service", "FAIL-FAST ASSERTION FAILED: %v", err)
+		if replySubj != "" {
+			_ = s.sendErrorReply(ctx, replySubj, err.Error(), "MISSING_TASK_SUBJECT")
+		}
+		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+			Component:  "AI_Service",
+			Event:      "TERMINATED",
+			Stream:     "WORKERS",
+			Subject:    msg.Subject(),
+			Consumer:   durableName,
+			TenantID:   t,
+			AppID:      a,
+			JobID:      j,
+			Attempt:    attempt,
+			DurationMs: time.Since(startTime).Milliseconds(),
+			Error:      err,
+		})
+		_ = msg.Term()
+		return
+	}
+
+	targetSubj := req.GetTaskSubject()
+
+	isScanned, hasFlag := extractIsScannedFlag(req)
 	var modelID string
 	if hasFlag {
 		if isScanned {
@@ -213,13 +267,13 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 		modelID = s.resolveModelID(targetSubj)
 	}
 
-	result, errCode, err := s.executeAction(ctx, parser, targetSubj, modelID)
+	result, errCode, err := s.executeAction(ctx, req, targetSubj, modelID)
 	if err != nil {
-		s.handleExecutionError(ctx, msg, replySubj, parser, errCode, err, durableName, t, a, j, attempt, startTime)
+		s.handleExecutionError(ctx, msg, replySubj, req, errCode, err, durableName, t, a, j, attempt, startTime)
 		return
 	}
 
-	s.handleExecutionSuccess(ctx, msg, replySubj, parser, result, durableName, t, a, j, attempt, startTime)
+	s.handleExecutionSuccess(ctx, msg, replySubj, req, result, durableName, t, a, j, attempt, startTime)
 }
 
 func (s *NatsServer) handleExceededRetries(ctx context.Context, msg jetstream.Msg, durableName, t, a, j string, attempt uint64, startTime time.Time) {
@@ -315,31 +369,31 @@ func (s *NatsServer) handleUnmarshalError(ctx context.Context, msg jetstream.Msg
 	_ = msg.Term()
 }
 
-func (s *NatsServer) executeAction(ctx context.Context, parser *workflowparser.NodeRequestParser, targetSubj string, modelID string) (string, string, error) {
-	docUri := parser.GetDocumentUri()
+func (s *NatsServer) executeAction(ctx context.Context, req *pb.ExecuteTaskRequest, targetSubj string, modelID string) (string, string, error) {
+	docUri := getDocumentUri(req)
 	if docUri != "" {
-		return s.processDocumentJIT(ctx, docUri, parser, modelID, targetSubj)
+		return s.processDocumentJIT(ctx, docUri, req, modelID, targetSubj)
 	}
-	res, err := s.analyzer.AnalyzeText(ctx, "", parser, nil, modelID)
+	res, err := s.analyzer.AnalyzeText(ctx, "", req, nil, modelID)
 	if err != nil {
-		step := getStepName(parser)
+		step := getStepName(req)
 		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: N/A] failed to perform action on payload: %w", step, err)
 	}
 	return res, "", nil
 }
 
-func (s *NatsServer) processDocumentJIT(ctx context.Context, docUri string, parser *workflowparser.NodeRequestParser, modelID string, targetSubj string) (string, string, error) {
-	step := getStepName(parser)
+func (s *NatsServer) processDocumentJIT(ctx context.Context, docUri string, req *pb.ExecuteTaskRequest, modelID string, targetSubj string) (string, string, error) {
+	step := getStepName(req)
 	if s.store == nil {
 		return "", "STORAGE_FETCH_FAILED", fmt.Errorf("[Step: %s, URI: %s] storage manager is not configured", step, docUri)
 	}
 
-	fileBytes, err := s.store.FetchFile(ctx, docUri, parser.GetIdentity())
+	fileBytes, err := s.store.FetchFile(ctx, docUri, req.Identity)
 	if err != nil {
 		return "", "STORAGE_FETCH_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to fetch document from storage: %w", step, docUri, err)
 	}
 
-	return s.dispatchBytesToAnalyzer(ctx, fileBytes, docUri, parser, modelID, targetSubj)
+	return s.dispatchBytesToAnalyzer(ctx, fileBytes, docUri, req, modelID, targetSubj)
 }
 
 func EstimateDocumentTokens(text string, images [][]byte) int {
@@ -364,108 +418,105 @@ func (s *NatsServer) checkDocumentTokenLimit(text string, images [][]byte, step 
 	return "LARGE_DOCUMENT_EXCEEDED", fmt.Errorf("[Step: %s, URI: %s] document token count (%d) exceeds max token limit (%d)", step, docUri, tokenCount, s.maxDocumentTokens)
 }
 
-func (s *NatsServer) analyzeTextWithTokenCheck(ctx context.Context, text string, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+func (s *NatsServer) analyzeTextWithTokenCheck(ctx context.Context, text string, step string, docUri string, req *pb.ExecuteTaskRequest, modelID string) (string, string, error) {
 	if errCode, tokenErr := s.checkDocumentTokenLimit(text, nil, step, docUri); tokenErr != nil {
 		return "", errCode, tokenErr
 	}
-	res, analyzeErr := s.analyzer.AnalyzeText(ctx, text, parser, nil, modelID)
+	res, analyzeErr := s.analyzer.AnalyzeText(ctx, text, req, nil, modelID)
 	if analyzeErr != nil {
 		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
 	}
 	return res, "", nil
 }
 
-func (s *NatsServer) analyzeImageWithTokenCheck(ctx context.Context, images [][]byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+func (s *NatsServer) analyzeImageWithTokenCheck(ctx context.Context, images [][]byte, step string, docUri string, req *pb.ExecuteTaskRequest, modelID string) (string, string, error) {
 	if errCode, tokenErr := s.checkDocumentTokenLimit("", images, step, docUri); tokenErr != nil {
 		return "", errCode, tokenErr
 	}
-	res, analyzeErr := s.analyzer.AnalyzeImage(ctx, images, parser, nil, modelID)
+	res, analyzeErr := s.analyzer.AnalyzeImage(ctx, images, req, nil, modelID)
 	if analyzeErr != nil {
 		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to perform action on payload: %w", step, docUri, analyzeErr)
 	}
 	return res, "", nil
 }
 
-func (s *NatsServer) dispatchBytesToAnalyzer(ctx context.Context, fileBytes []byte, docUri string, parser *workflowparser.NodeRequestParser, modelID string, targetSubj string) (string, string, error) {
-	step := getStepName(parser)
+func (s *NatsServer) dispatchBytesToAnalyzer(ctx context.Context, fileBytes []byte, docUri string, req *pb.ExecuteTaskRequest, modelID string, targetSubj string) (string, string, error) {
+	step := getStepName(req)
 	ext := strings.ToLower(filepath.Ext(docUri))
 
-	isScanned, hasFlag := extractIsScannedFlag(parser)
+	isScanned, hasFlag := extractIsScannedFlag(req)
 	if hasFlag && ext == ".pdf" {
 		if isScanned {
-			return s.processPdfVisionBytes(ctx, fileBytes, step, docUri, parser, modelID)
+			return s.processPdfVisionBytes(ctx, fileBytes, step, docUri, req, modelID)
 		}
-		return s.processPdfTextBytes(ctx, fileBytes, step, docUri, parser, modelID)
+		return s.processPdfTextBytes(ctx, fileBytes, step, docUri, req, modelID)
 	}
 
 	isVision := isVisionRequest(targetSubj, modelID, ext)
 
 	if isVision {
-		return s.processVisionBytes(ctx, fileBytes, ext, step, docUri, parser, modelID)
+		return s.processVisionBytes(ctx, fileBytes, ext, step, docUri, req, modelID)
 	}
 
 	if ext == ".pdf" {
-		return s.processPdfTextBytes(ctx, fileBytes, step, docUri, parser, modelID)
+		return s.processPdfTextBytes(ctx, fileBytes, step, docUri, req, modelID)
 	}
 
 	if ext == ".docx" {
-		return s.processDocxTextBytes(ctx, fileBytes, step, docUri, parser, modelID)
+		return s.processDocxTextBytes(ctx, fileBytes, step, docUri, req, modelID)
 	}
 
 	text := string(fileBytes)
 	fileBytes = nil
-	return s.analyzeTextWithTokenCheck(ctx, text, step, docUri, parser, modelID)
+	return s.analyzeTextWithTokenCheck(ctx, text, step, docUri, req, modelID)
 }
 
-func (s *NatsServer) processVisionBytes(ctx context.Context, fileBytes []byte, ext string, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+func (s *NatsServer) processVisionBytes(ctx context.Context, fileBytes []byte, ext string, step string, docUri string, req *pb.ExecuteTaskRequest, modelID string) (string, string, error) {
 	if ext == ".pdf" {
-		return s.processPdfVisionBytes(ctx, fileBytes, step, docUri, parser, modelID)
+		return s.processPdfVisionBytes(ctx, fileBytes, step, docUri, req, modelID)
 	}
-	return s.processRawImageBytes(ctx, fileBytes, step, docUri, parser, modelID)
+	return s.processRawImageBytes(ctx, fileBytes, step, docUri, req, modelID)
 }
 
-func (s *NatsServer) processPdfVisionBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+func (s *NatsServer) processPdfVisionBytes(ctx context.Context, fileBytes []byte, step string, docUri string, req *pb.ExecuteTaskRequest, modelID string) (string, string, error) {
 	images, err := docparser.ConvertPdfToImages(fileBytes)
 	fileBytes = nil
 	if err != nil {
 		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] pdftoppm failed: %w", step, docUri, err)
 	}
-	return s.analyzeImageWithTokenCheck(ctx, images, step, docUri, parser, modelID)
+	return s.analyzeImageWithTokenCheck(ctx, images, step, docUri, req, modelID)
 }
 
-func (s *NatsServer) processRawImageBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+func (s *NatsServer) processRawImageBytes(ctx context.Context, fileBytes []byte, step string, docUri string, req *pb.ExecuteTaskRequest, modelID string) (string, string, error) {
 	images := [][]byte{fileBytes}
 	fileBytes = nil
-	return s.analyzeImageWithTokenCheck(ctx, images, step, docUri, parser, modelID)
+	return s.analyzeImageWithTokenCheck(ctx, images, step, docUri, req, modelID)
 }
 
-func (s *NatsServer) processPdfTextBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+func (s *NatsServer) processPdfTextBytes(ctx context.Context, fileBytes []byte, step string, docUri string, req *pb.ExecuteTaskRequest, modelID string) (string, string, error) {
 	text, err := docparser.ExtractPdfText(fileBytes)
 	fileBytes = nil
 	if err != nil {
 		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] pdftotext failed: %w", step, docUri, err)
 	}
-	return s.analyzeTextWithTokenCheck(ctx, text, step, docUri, parser, modelID)
+	return s.analyzeTextWithTokenCheck(ctx, text, step, docUri, req, modelID)
 }
 
-func (s *NatsServer) processDocxTextBytes(ctx context.Context, fileBytes []byte, step string, docUri string, parser *workflowparser.NodeRequestParser, modelID string) (string, string, error) {
+func (s *NatsServer) processDocxTextBytes(ctx context.Context, fileBytes []byte, step string, docUri string, req *pb.ExecuteTaskRequest, modelID string) (string, string, error) {
 	text, err := docparser.ExtractDocxText(fileBytes)
 	fileBytes = nil
 	if err != nil {
 		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] docx extraction failed: %w", step, docUri, err)
 	}
-	return s.analyzeTextWithTokenCheck(ctx, text, step, docUri, parser, modelID)
+	return s.analyzeTextWithTokenCheck(ctx, text, step, docUri, req, modelID)
 }
 
-func getStepName(parser *workflowparser.NodeRequestParser) string {
-	if parser == nil {
+func getStepName(req *pb.ExecuteTaskRequest) string {
+	if req == nil {
 		return "UNKNOWN"
 	}
-	if step := parser.GetStepId(); step != "" {
+	if step := req.StepId; step != "" {
 		return step
-	}
-	if node := parser.GetNodeName(); node != "" {
-		return node
 	}
 	return "AI_PROCESSING"
 }
@@ -485,7 +536,7 @@ func isVisionRequest(targetSubj string, modelID string, ext string) bool {
 	return false
 }
 
-func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg, replySubj string, parser *workflowparser.NodeRequestParser, errCode string, err error, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, errCode string, err error, durableName, t, a, j string, attempt uint64, startTime time.Time) {
 	if ctx.Err() != nil {
 		s.handleContextCanceled(msg, durableName, t, a, j, attempt, startTime)
 		return
@@ -577,24 +628,30 @@ func (s *NatsServer) handleTempError(msg jetstream.Msg, err error, durableName, 
 	_ = msg.NakWithDelay(time.Duration(natsErrorTimeout) * time.Second)
 }
 
-func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.Msg, replySubj string, parser *workflowparser.NodeRequestParser, result string, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, result string, durableName, t, a, j string, attempt uint64, startTime time.Time) {
 	result = jsonclean.CleanJSON(result)
 	logger.Info("AI_Service", "AI Output for Job %s:\n%s", j, result)
 
-	docUri := parser.GetDocumentUri()
+	docUri := getDocumentUri(req)
 	uriStr := docUri
 	if uriStr == "" {
 		uriStr = "N/A"
 	}
-	step := getStepName(parser)
+	step := getStepName(req)
 
 	var outputMap map[string]any
 	if err := json.Unmarshal([]byte(result), &outputMap); err != nil {
-		errMsg := fmt.Sprintf("[Step: %s, URI: %s] AI returned invalid JSON: %v", step, uriStr, err)
-		errReply := s.sendErrorReply(ctx, replySubj, errMsg, "INVALID_AI_OUTPUT")
-		s.logReplyError(errReply)
-		_ = msg.Term()
-		return
+		if strings.HasPrefix(req.TaskSubject, "worker.ai.ocr") || strings.HasPrefix(req.TaskSubject, "worker.ai.vision") || req.TaskSubject == "worker.ai.inference" {
+			outputMap = map[string]any{
+				"result": result,
+			}
+		} else {
+			errMsg := fmt.Sprintf("[Step: %s, URI: %s] AI returned invalid JSON: %v", step, uriStr, err)
+			errReply := s.sendErrorReply(ctx, replySubj, errMsg, "INVALID_AI_OUTPUT")
+			s.logReplyError(errReply)
+			_ = msg.Term()
+			return
+		}
 	}
 
 	actionResultStruct, err := structpb.NewStruct(outputMap)
@@ -609,6 +666,14 @@ func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.M
 	resp := &pb.PerformActionResponse{
 		Success:      true,
 		ActionResult: actionResultStruct,
+	}
+
+	if respJson, err := protojson.Marshal(resp); err == nil {
+		logger.Info("AI_Service", "[EXECUTION SUCCESS PAYLOAD] Full PerformActionResponse: %s", string(respJson))
+	}
+
+	if resp.ActionResult != nil {
+		logger.Info("Output payload", "%s: %+v", "payload", resp.ActionResult.AsMap())
 	}
 
 	respBytes, err := proto.Marshal(resp)
@@ -770,27 +835,14 @@ func (s *NatsServer) resolveModelID(subject string) string {
 	return envutil.MustGetString(envKey)
 }
 
-func extractIsScannedFlag(parser *workflowparser.NodeRequestParser) (bool, bool) {
-	if parser == nil {
+func extractIsScannedFlag(req *pb.ExecuteTaskRequest) (bool, bool) {
+	if req == nil || req.Payload == nil {
 		return false, false
 	}
-
+	payloadMap := req.Payload.AsMap()
 	keys := []string{"IsScanned", "is_scanned"}
-
-	meta := parser.GetMetadata()
 	for _, k := range keys {
-		v, ok := meta[k]
-		if !ok {
-			continue
-		}
-		if parsed, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
-			return parsed, true
-		}
-	}
-
-	funcState := parser.GetFunctionalState()
-	for _, k := range keys {
-		v, ok := funcState[k]
+		v, ok := payloadMap[k]
 		if !ok {
 			continue
 		}
@@ -798,27 +850,31 @@ func extractIsScannedFlag(parser *workflowparser.NodeRequestParser) (bool, bool)
 			return b, true
 		}
 		if s, ok := v.(string); ok {
-			if parsed, err := strconv.ParseBool(strings.TrimSpace(s)); err == nil {
+			s = strings.TrimSpace(strings.ToLower(s))
+			if s == "yes" || s == "true" || s == "1" {
+				return true, true
+			}
+			if s == "no" || s == "false" || s == "0" {
+				return false, true
+			}
+			if parsed, err := strconv.ParseBool(s); err == nil {
 				return parsed, true
 			}
 		}
 	}
-
-	nonFuncState := parser.GetNonFunctionalState()
-	for _, k := range keys {
-		v, ok := nonFuncState[k]
-		if !ok {
-			continue
-		}
-		if b, ok := v.(bool); ok {
-			return b, true
-		}
-		if s, ok := v.(string); ok {
-			if parsed, err := strconv.ParseBool(strings.TrimSpace(s)); err == nil {
-				return parsed, true
-			}
-		}
-	}
-
 	return false, false
+}
+
+func getDocumentUri(req *pb.ExecuteTaskRequest) string {
+	if req == nil || req.Payload == nil {
+		return ""
+	}
+	payloadMap := req.Payload.AsMap()
+	keys := []string{"DocumentUri", "document_uri"}
+	for _, k := range keys {
+		if v, ok := payloadMap[k].(string); ok {
+			return v
+		}
+	}
+	return ""
 }

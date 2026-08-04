@@ -30,27 +30,18 @@ func main() {
 	logger.InitLogger()
 
 	queueSizeStr := envutil.MustGetString("APP_QUEUE_SIZE")
-	if queueSizeStr == "" {
-		queueSizeStr = "100"
-	}
 	_, err := strconv.Atoi(queueSizeStr)
 	if err != nil {
 		logger.Fatal("AI_Service", "invalid APP_QUEUE_SIZE: %v", err)
 	}
 
 	workerPoolSizeStr := envutil.MustGetString("WORKER_POOL_SIZE")
-	if workerPoolSizeStr == "" {
-		workerPoolSizeStr = "5"
-	}
 	workerPoolSize, err := strconv.Atoi(workerPoolSizeStr)
 	if err != nil {
 		logger.Fatal("AI_Service", "invalid WORKER_POOL_SIZE: %v", err)
 	}
 
 	aiHost := envutil.MustGetString("OPENAI_BASE_URL")
-	if aiHost == "" {
-		aiHost = "http://localhost:11434/v1" // default for local Ollama via OpenAI spec
-	}
 
 	// Configure the dual AI models
 	aiTextModel := envutil.MustGetString("OPENAI_TEXT_MODEL")
@@ -62,9 +53,6 @@ func main() {
 
 	// Connect to NATS
 	natsURL := envutil.MustGetString("NATS_URL")
-	if natsURL == "" {
-		natsURL = "nats://127.0.0.1:4222"
-	}
 	nc, err := natsutil.ConnectWithRetries(natsURL, "AI_Service")
 	if err != nil {
 		logger.Fatal("AI_Service", "NATS connection is required for ai_service: %v", err)
@@ -77,50 +65,32 @@ func main() {
 	}
 
 	queueFilter := envutil.MustGetString("QUEUE_MODEL_FILTER")
-	if queueFilter == "" {
-		queueFilter = ">" // consume all by default
-	}
 
 	maxAckPendingStr := envutil.MustGetString("NATS_MAX_ACK_PENDING")
-	if maxAckPendingStr == "" {
-		maxAckPendingStr = strconv.Itoa(workerPoolSize)
-	}
 	maxAckPending, err := strconv.Atoi(maxAckPendingStr)
 	if err != nil {
 		logger.Fatal("AI_Service", "invalid NATS_MAX_ACK_PENDING: %v", err)
 	}
 
 	pullMaxMessagesStr := envutil.MustGetString("NATS_PULL_MAX_MESSAGES")
-	if pullMaxMessagesStr == "" {
-		pullMaxMessagesStr = strconv.Itoa(workerPoolSize)
-	}
 	pullMaxMessages, err := strconv.Atoi(pullMaxMessagesStr)
 	if err != nil {
 		logger.Fatal("AI_Service", "invalid NATS_PULL_MAX_MESSAGES: %v", err)
 	}
 
 	temperatureStr := envutil.MustGetString("OPENAI_TEMPERATURE")
-	if temperatureStr == "" {
-		temperatureStr = "0.0"
-	}
 	temperature, err := strconv.ParseFloat(temperatureStr, 32)
 	if err != nil {
 		logger.Fatal("AI_Service", "invalid OPENAI_TEMPERATURE: %v", err)
 	}
 
 	maxTokensStr := envutil.MustGetString("OPENAI_MAX_TOKENS")
-	if maxTokensStr == "" {
-		maxTokensStr = "4096"
-	}
 	maxTokens, err := strconv.Atoi(maxTokensStr)
 	if err != nil {
 		logger.Fatal("AI_Service", "invalid OPENAI_MAX_TOKENS: %v", err)
 	}
 
 	timeoutStr := envutil.MustGetString("OPENAI_TIMEOUT_MINUTES")
-	if timeoutStr == "" {
-		timeoutStr = "5"
-	}
 	timeout, err := strconv.Atoi(timeoutStr)
 	if err != nil {
 		logger.Fatal("AI_Service", "invalid OPENAI_TIMEOUT_MINUTES: %v", err)
@@ -132,9 +102,7 @@ func main() {
 	config.TextModel = aiTextModel
 	config.VisionModel = aiVisionModel
 	visionBaseURL := envutil.MustGetString("OPENAI_VISION_BASE_URL")
-	if visionBaseURL != "" {
-		config.VisionBaseURL = visionBaseURL
-	}
+	config.VisionBaseURL = visionBaseURL
 	config.EmbeddingModel = aiEmbeddingModel
 	config.Temperature = float32(temperature)
 	config.MaxTokens = maxTokens
@@ -149,13 +117,9 @@ func main() {
 	config.AnthropicVisionModel = envutil.MustGetString("ANTHROPIC_VISION_MODEL")
 
 	apiType := envutil.MustGetString("OPENAI_API_TYPE")
-	if apiType != "" {
-		config.APIType = ai.APIType(apiType)
-	}
+	config.APIType = ai.APIType(apiType)
 	authToken := envutil.MustGetString("OPENAI_AUTH_TOKEN")
-	if authToken != "" {
-		config.AuthToken = authToken
-	}
+	config.AuthToken = authToken
 
 	analyzer, err := ai.NewAnalyzerFactory(config)
 	if err != nil {
@@ -163,9 +127,6 @@ func main() {
 	}
 
 	gatewayAddr := envutil.MustGetString("STORAGE_GATEWAY_ADDR")
-	if gatewayAddr == "" {
-		gatewayAddr = "localhost:50051"
-	}
 	gatewayConn, err := grpc.NewClient(gatewayAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		logger.Fatal("AI_Service", "failed to dial storage_gateway: %v", err)
@@ -175,10 +136,7 @@ func main() {
 	maxDocTokens := envutil.GetIntOrDefault("LARGE_DOCUMENT_MAX_TOKENS", 8192)
 	natsServer := server.NewNatsServer(nc, js, analyzer, store, workerPoolSize, queueFilter, maxAckPending, pullMaxMessages, maxDocTokens)
 
-	visionHost := aiHost
-	if visionBaseURL != "" {
-		visionHost = visionBaseURL
-	}
+	visionHost := visionBaseURL
 	logger.Info("AI_Service", "AI Engine: OpenAI Spec | Host: %s | Text: %s | Vision: %s (Host: %s) | Embed: %s | Chunking: %s | Inference: %s | Extraction: %s", aiHost, aiTextModel, aiVisionModel, visionHost, aiEmbeddingModel, chunkingRoute, inferenceRoute, extractionRoute)
 
 	ctx, cancel := context.WithCancel(context.Background())

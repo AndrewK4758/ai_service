@@ -2,13 +2,14 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/envutil"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
+
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -53,8 +54,8 @@ func NewBedrockAnalyzerWithClient(aiConfig OpenAIConfig, client BedrockRuntimeAP
 	}
 }
 
-func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
-	prompt := buildPrompt(workflowCtx, action, text)
+func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+	prompt := buildPrompt(req, action, text)
 
 	inferenceConfig := &types.InferenceConfiguration{
 		Temperature: &b.temperature,
@@ -69,7 +70,7 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflow
 	}
 
 	// Bedrock Converse API
-	req := &bedrockruntime.ConverseInput{
+	converseReq := &bedrockruntime.ConverseInput{
 		ModelId: &m,
 		Messages: []types.Message{
 			{
@@ -83,9 +84,17 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflow
 	}
 
 	logger.Info("AI_Service", "[Ai Service] Sending Bedrock request to model %s", m)
-	resp, err := b.client.Converse(ctx, req)
+	if reqBytes, err := json.Marshal(converseReq); err == nil {
+		logger.Info("AI_Service", "[Ai Service] Bedrock Converse Request Body: %s", string(reqBytes))
+	}
+
+	resp, err := b.client.Converse(ctx, converseReq)
 	if err != nil {
 		return "", fmt.Errorf("bedrock inference failed: %w", err)
+	}
+
+	if respBytes, err := json.Marshal(resp); err == nil {
+		logger.Info("AI_Service", "[Ai Service] Bedrock Raw Response Output: %s", string(respBytes))
 	}
 
 	msg, ok := resp.Output.(*types.ConverseOutputMemberMessage)
@@ -103,10 +112,10 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, workflow
 	return jsonclean.CleanJSON(txt.Value), nil
 }
 
-func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := envutil.MustGetString("DEFAULT_VISION_PROMPT")
-	if action != nil && workflowCtx != nil {
-		prompt = buildPrompt(workflowCtx, action, "")
+	if action != nil && req != nil {
+		prompt = buildPrompt(req, action, "")
 	}
 
 	contentBlocks := []types.ContentBlock{
@@ -133,7 +142,7 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 		m = b.visionModel
 	}
 
-	req := &bedrockruntime.ConverseInput{
+	converseReq := &bedrockruntime.ConverseInput{
 		ModelId: &m,
 		Messages: []types.Message{
 			{
@@ -145,9 +154,17 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 	}
 
 	logger.Info("AI_Service", "[Ai Service] Sending Bedrock Vision request to model %s", m)
-	resp, err := b.client.Converse(ctx, req)
+	if reqBytes, err := json.Marshal(converseReq); err == nil {
+		logger.Info("AI_Service", "[Ai Service] Bedrock Converse Request Body: %s", string(reqBytes))
+	}
+
+	resp, err := b.client.Converse(ctx, converseReq)
 	if err != nil {
 		return "", fmt.Errorf("bedrock vision inference failed: %w", err)
+	}
+
+	if respBytes, err := json.Marshal(resp); err == nil {
+		logger.Info("AI_Service", "[Ai Service] Bedrock Raw Response Output: %s", string(respBytes))
 	}
 
 	msg, ok := resp.Output.(*types.ConverseOutputMemberMessage)

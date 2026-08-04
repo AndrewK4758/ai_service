@@ -16,7 +16,7 @@ import (
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
+
 )
 
 func getInferenceTimeout() time.Duration {
@@ -162,6 +162,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest, 
 	}
 
 	logger.Info("AI_Service", "[Ai Service] Received response status %d", resp.StatusCode)
+	logger.Info("AI_Service", "[Ai Service] Raw Response Body: %s", string(bodyBytes))
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("openai endpoint returned status %d: %s", resp.StatusCode, string(bodyBytes))
@@ -181,8 +182,8 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest, 
 	return response, nil
 }
 
-func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
-	prompt := buildPrompt(workflowCtx, action, text)
+func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+	prompt := buildPrompt(req, action, text)
 	logger.Info("AI_Service", "[Ai Service] Built Prompt before sending:\n%s\n", prompt)
 
 	m := modelID
@@ -200,14 +201,18 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, workflowC
 		},
 		Temperature: o.config.Temperature,
 		MaxTokens:   o.config.MaxTokens,
-		ResponseFormat: buildResponseFormat(workflowCtx),
+		ResponseFormat: buildResponseFormat(req),
 	}
 
-	return o.callOpenAI(ctx, reqBody)
+	resp, err := o.callOpenAI(ctx, reqBody)
+	if err != nil {
+		return "", err
+	}
+	return enforceDeterministicValidation(resp, req), nil
 }
 
-func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
-	prompt := buildPrompt(workflowCtx, action, "(See attached image(s))")
+func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+	prompt := buildPrompt(req, action, "(See attached image(s))")
 
 	var contentArray []map[string]any
 	contentArray = append(contentArray, map[string]any{
@@ -240,10 +245,14 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 		},
 		Temperature: o.config.Temperature,
 		MaxTokens:   o.config.MaxTokens,
-		ResponseFormat: buildResponseFormat(workflowCtx),
+		ResponseFormat: buildResponseFormat(req),
 	}
 
-	return o.callOpenAI(ctx, reqBody, o.config.VisionBaseURL)
+	resp, err := o.callOpenAI(ctx, reqBody, o.config.VisionBaseURL)
+	if err != nil {
+		return "", err
+	}
+	return enforceDeterministicValidation(resp, req), nil
 }
 
 type openAIEmbeddingRequest struct {
@@ -324,11 +333,18 @@ func (o *OpenAIAnalyzer) GenerateEmbedding(ctx context.Context, text string, mod
 	return oaiResp.Data[0].Embedding, nil
 }
 
-func buildResponseFormat(workflowCtx *workflowparser.NodeRequestParser) *openAIResponseFormat {
-	if workflowCtx == nil {
+func buildResponseFormat(req *pb.ExecuteTaskRequest) *openAIResponseFormat {
+	if req == nil {
 		return &openAIResponseFormat{Type: "json_object"}
 	}
-	schemaStr := workflowCtx.GetExpectedSchema()
+	schemaStr := ""
+	if req.Payload != nil {
+		if schemaVal, ok := req.Payload.AsMap()["expected_schema"]; ok {
+			if s, isStr := schemaVal.(string); isStr {
+				schemaStr = s
+			}
+		}
+	}
 	if schemaStr == "" {
 		return &openAIResponseFormat{Type: "json_object"}
 	}
@@ -338,6 +354,8 @@ func buildResponseFormat(workflowCtx *workflowparser.NodeRequestParser) *openAIR
 		return &openAIResponseFormat{Type: "json_object"}
 	}
 
+	convertExpectedSchema(schemaObj)
+
 	return &openAIResponseFormat{
 		Type: "json_schema",
 		JSONSchema: &openAIJSONSchema{
@@ -346,4 +364,69 @@ func buildResponseFormat(workflowCtx *workflowparser.NodeRequestParser) *openAIR
 			Schema: schemaObj,
 		},
 	}
+}
+
+func convertExpectedSchema(schemaObj map[string]any) {
+	if props, ok := schemaObj["properties"].(map[string]any); ok {
+		var required []string
+		for k, v := range props {
+			required = append(required, k)
+			if propObj, isObj := v.(map[string]any); isObj {
+				if typeVal, hasType := propObj["type"]; hasType {
+					if typeStr, isStr := typeVal.(string); isStr {
+						propObj["type"] = []string{typeStr, "null"}
+					}
+				}
+			}
+		}
+		schemaObj["required"] = required
+		schemaObj["additionalProperties"] = false
+	}
+}
+
+func enforceDeterministicValidation(responseStr string, req *pb.ExecuteTaskRequest) string {
+	if req == nil || req.Payload == nil {
+		return responseStr
+	}
+
+	schemaVal, ok := req.Payload.AsMap()["expected_schema"]
+	if !ok {
+		return responseStr
+	}
+	schemaStr, isStr := schemaVal.(string)
+	if !isStr || schemaStr == "" {
+		return responseStr
+	}
+
+	var schemaObj map[string]any
+	if err := json.Unmarshal([]byte(schemaStr), &schemaObj); err != nil {
+		return responseStr
+	}
+	props, ok := schemaObj["properties"].(map[string]any)
+	if !ok {
+		return responseStr
+	}
+
+	var respObj map[string]any
+	if err := json.Unmarshal([]byte(responseStr), &respObj); err != nil {
+		return responseStr
+	}
+
+	sanitizedObj := make(map[string]any)
+	for k := range props {
+		val, exists := respObj[k]
+		if !exists {
+			sanitizedObj[k] = nil
+		} else if strVal, ok := val.(string); ok && strVal == "null" {
+			sanitizedObj[k] = nil
+		} else {
+			sanitizedObj[k] = val
+		}
+	}
+
+	resBytes, err := json.Marshal(sanitizedObj)
+	if err != nil {
+		return responseStr
+	}
+	return string(resBytes)
 }

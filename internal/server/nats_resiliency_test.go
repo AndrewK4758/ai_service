@@ -10,10 +10,10 @@ import (
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type memoryAuditAnalyzer struct {
@@ -24,7 +24,7 @@ type memoryAuditAnalyzer struct {
 	lastErr      error
 }
 
-func (m *memoryAuditAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+func (m *memoryAuditAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.callCount++
@@ -32,7 +32,7 @@ func (m *memoryAuditAnalyzer) AnalyzeText(ctx context.Context, text string, work
 	return `{"status":"processed"}`, m.lastErr
 }
 
-func (m *memoryAuditAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+func (m *memoryAuditAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.callCount++
@@ -90,16 +90,12 @@ func TestResiliency_NatsServer_JITMemoryDiscarding(t *testing.T) {
 	hdr := make(nats.Header)
 	hdr.Set("Reply-Subject", "test.reply.jit")
 
-	req := &pb.ExecuteWorkflowNodeRequest{
-		Identity: &pb.InfrastructureIdentity{
-			TenantId: "tenant_mem",
-			AppId:    "app_mem",
-			JobId:    "job_mem",
-		},
-		Storage: &pb.StorageContract{
-			DocumentUri: "internal-store://tenant_mem/app_mem/job_mem/large.txt",
-		},
-		StepId: "MEM_TEST_STEP",
+	st, _ := structpb.NewStruct(map[string]any{"DocumentUri": "internal-store://t/a/j/mem.txt"})
+	req := &pb.ExecuteTaskRequest{
+		Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+		TaskSubject: "worker.ai.default",
+		StepId:      "MEM_TEST_STEP",
+		Payload:     st,
 	}
 	data, _ := proto.Marshal(req)
 
@@ -141,16 +137,12 @@ func TestResiliency_NatsServer_HighConcurrencyStress(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func(id int) {
 			defer wg.Done()
-			req := &pb.ExecuteWorkflowNodeRequest{
-				Identity: &pb.InfrastructureIdentity{
-					TenantId: "t_stress",
-					AppId:    "a_stress",
-					JobId:    fmt.Sprintf("j_stress_%d", id),
-				},
-				Storage: &pb.StorageContract{
-					DocumentUri: fmt.Sprintf("internal-store://t_stress/a_stress/j_stress_%d/doc.txt", id),
-				},
-				StepId: fmt.Sprintf("STEP_%d", id),
+			st, _ := structpb.NewStruct(map[string]any{"DocumentUri": fmt.Sprintf("internal-store://t/a/j/doc_%d.txt", id)})
+			req := &pb.ExecuteTaskRequest{
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+				TaskSubject: "worker.ai.default",
+				StepId:      fmt.Sprintf("STEP_%d", id),
+				Payload:     st,
 			}
 			data, _ := proto.Marshal(req)
 			msg := &mockMsg{
@@ -206,9 +198,12 @@ func TestResiliency_ErrorFormatVerification(t *testing.T) {
 			hdr := make(nats.Header)
 			hdr.Set("Reply-Subject", "test.reply.err")
 
-			req := &pb.ExecuteWorkflowNodeRequest{
-				Storage: &pb.StorageContract{DocumentUri: tt.docUri},
-				StepId:  tt.stepId,
+			st, _ := structpb.NewStruct(map[string]any{"DocumentUri": tt.docUri})
+			req := &pb.ExecuteTaskRequest{
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+				TaskSubject: "worker.ai.default",
+				StepId:      tt.stepId,
+				Payload:     st,
 			}
 			data, _ := proto.Marshal(req)
 			msg := &mockMsg{

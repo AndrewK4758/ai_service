@@ -1,0 +1,2 @@
+#!/bin/bash
+sed -i 's/req := &pb.ExecuteTaskRequest{}/req := \&pb.ExecuteTaskRequest{\n\t\t\tStepId: "ADV_AI_STEP",\n\t\t\tPayload: \&structpb.Struct{\n\t\t\t\tFields: map[string]*structpb.Value{\n\t\t\t\t\t"DocumentUri": structpb.NewStringValue("internal-store:\/\/t_adv\/a_adv\/j_adv\/doc.txt"),\n\t\t\t\t},\n\t\t\t},\n\t\t}\n\n\t\tdata, _ := proto.Marshal(req)\n\t\tmsg := \&mockMsg{\n\t\t\tdata:    data,\n\t\t\theaders: hdr,\n\t\t\tmetadata: \&jetstream.MsgMetadata{\n\t\t\t\tNumDelivered: 1,\n\t\t\t},\n\t\t}/g' internal/server/adversarial_m4_test.go

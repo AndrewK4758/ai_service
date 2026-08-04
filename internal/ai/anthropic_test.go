@@ -11,7 +11,6 @@ import (
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
 )
 
 func init() {
@@ -71,8 +70,8 @@ func TestAnthropicAnalyzer_AnalyzeText(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	req := &pb.ExecuteWorkflowNodeRequest{}
-	parser := workflowparser.NewNodeRequestParser(req)
+	req := &pb.ExecuteTaskRequest{}
+	parser := req
 	action := &pb.ActionDefinition{Name: "test_action"}
 
 	// Test 1: Fallback model
@@ -149,8 +148,8 @@ func TestAnthropicAnalyzer_AnalyzeImage(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	req := &pb.ExecuteWorkflowNodeRequest{}
-	parser := workflowparser.NewNodeRequestParser(req)
+	req := &pb.ExecuteTaskRequest{}
+	parser := req
 	action := &pb.ActionDefinition{Name: "vision_task"}
 	images := [][]byte{[]byte("fake-jpeg-bytes")}
 

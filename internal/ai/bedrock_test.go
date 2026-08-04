@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	pb "github.com/AndrewK4758/shared_protos"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
@@ -50,8 +49,8 @@ func TestBedrockAnalyzer_AnalyzeText(t *testing.T) {
 
 	analyzer := NewBedrockAnalyzerWithClient(config, mockClient)
 	ctx := context.Background()
-	req := &pb.ExecuteWorkflowNodeRequest{}
-	parser := workflowparser.NewNodeRequestParser(req)
+	req := &pb.ExecuteTaskRequest{}
+	parser := req
 	action := &pb.ActionDefinition{Name: "bedrock_action"}
 
 	// Test 1: Default text model
@@ -105,8 +104,8 @@ func TestBedrockAnalyzer_AnalyzeImage(t *testing.T) {
 
 	analyzer := NewBedrockAnalyzerWithClient(config, mockClient)
 	ctx := context.Background()
-	req := &pb.ExecuteWorkflowNodeRequest{}
-	parser := workflowparser.NewNodeRequestParser(req)
+	req := &pb.ExecuteTaskRequest{}
+	parser := req
 	action := &pb.ActionDefinition{Name: "bedrock_vision"}
 	images := [][]byte{[]byte("fake-image-bytes")}
 

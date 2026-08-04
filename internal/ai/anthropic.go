@@ -14,7 +14,7 @@ import (
 	"github.com/AndrewK4758/shared_utils/envutil"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
+
 )
 
 // AnthropicAnalyzer implements the Analyzer interface for Anthropic Messages REST API endpoints
@@ -146,6 +146,7 @@ func (a *AnthropicAnalyzer) callAnthropic(ctx context.Context, reqBody anthropic
 	req.Header.Set("anthropic-version", a.version)
 
 	logger.Info("AI_Service", "[Ai Service] Sending Anthropic request to %s with model %s", url, reqBody.Model)
+	logger.Info("AI_Service", "[Ai Service] Request Body: %s", string(jsonData))
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
@@ -159,6 +160,7 @@ func (a *AnthropicAnalyzer) callAnthropic(ctx context.Context, reqBody anthropic
 	}
 
 	logger.Info("AI_Service", "[Ai Service] Received Anthropic response status %d", resp.StatusCode)
+	logger.Info("AI_Service", "[Ai Service] Raw Response Body: %s", string(bodyBytes))
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("anthropic endpoint returned status %d: %s", resp.StatusCode, string(bodyBytes))
@@ -188,8 +190,8 @@ func (a *AnthropicAnalyzer) callAnthropic(ctx context.Context, reqBody anthropic
 	return result, nil
 }
 
-func (a *AnthropicAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
-	prompt := buildPrompt(workflowCtx, action, text)
+func (a *AnthropicAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+	prompt := buildPrompt(req, action, text)
 
 	m := modelID
 	if m == "" {
@@ -221,8 +223,8 @@ func (a *AnthropicAnalyzer) AnalyzeText(ctx context.Context, text string, workfl
 	return a.callAnthropic(ctx, reqBody)
 }
 
-func (a *AnthropicAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
-	prompt := buildPrompt(workflowCtx, action, "(See attached image(s))")
+func (a *AnthropicAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+	prompt := buildPrompt(req, action, "(See attached image(s))")
 
 	contentBlocks := []anthropicContentBlock{
 		{

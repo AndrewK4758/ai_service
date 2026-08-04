@@ -14,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func init() {
@@ -106,13 +107,16 @@ func TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths(t *testin
 		hdr := make(nats.Header)
 		hdr.Set("Reply-Subject", "test.reply.adv")
 
-		req := &pb.ExecuteWorkflowNodeRequest{
-			Identity: &pb.InfrastructureIdentity{TenantId: "t_adv", AppId: "a_adv", JobId: "j_adv"},
-			Storage:  &pb.StorageContract{DocumentUri: "internal-store://t_adv/a_adv/j_adv/doc.txt"},
-			StepId:   "ADV_AI_STEP",
+		payload, _ := structpb.NewStruct(map[string]any{
+			"DocumentUri": "internal-store://t_adv/a_adv/j_adv/doc.txt",
+		})
+		req := &pb.ExecuteTaskRequest{
+			Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+			TaskSubject: "worker.ai.default",
+			StepId:      "ADV_AI_STEP",
+			Payload:     payload,
 		}
 		data, _ := proto.Marshal(req)
-
 		msg := &mockMsg{
 			data:    data,
 			headers: hdr,
@@ -173,16 +177,9 @@ func TestAdversarial_AIService_JITByteDiscardAndMemoryAudit(t *testing.T) {
 
 	// Run 20 sequential JIT fetches of 5MB files
 	for i := 0; i < 20; i++ {
-		req := &pb.ExecuteWorkflowNodeRequest{
-			Identity: &pb.InfrastructureIdentity{
-				TenantId: "t_mem",
-				AppId:    "a_mem",
-				JobId:    fmt.Sprintf("j_mem_%d", i),
-			},
-			Storage: &pb.StorageContract{
-				DocumentUri: fmt.Sprintf("internal-store://t_mem/a_mem/j_mem_%d/bigfile.txt", i),
-			},
-			StepId: "JIT_MEMORY_STEP",
+		req := &pb.ExecuteTaskRequest{
+			Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+			TaskSubject: "worker.ai.default",
 		}
 		data, _ := proto.Marshal(req)
 		hdr := make(nats.Header)
@@ -229,16 +226,9 @@ func TestAdversarial_AIService_HighConcurrencyStress(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 
-			req := &pb.ExecuteWorkflowNodeRequest{
-				Identity: &pb.InfrastructureIdentity{
-					TenantId: "t_race",
-					AppId:    "a_race",
-					JobId:    fmt.Sprintf("j_race_%d", id),
-				},
-				Storage: &pb.StorageContract{
-					DocumentUri: fmt.Sprintf("internal-store://t_race/a_race/j_race_%d/doc.txt", id),
-				},
-				StepId: fmt.Sprintf("STEP_RACE_%d", id),
+			req := &pb.ExecuteTaskRequest{
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+				TaskSubject: "worker.ai.default",
 			}
 
 			data, _ := proto.Marshal(req)

@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/protobuf/proto"
@@ -31,13 +31,13 @@ func newModelTrackingAnalyzer() *modelTrackingAnalyzer {
 	}
 }
 
-func (m *modelTrackingAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+func (m *modelTrackingAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	jobID := "unknown"
-	if workflowCtx != nil {
-		_, _, jobID = workflowCtx.ExtractIdentity()
+	if workflowCtx != nil && workflowCtx.Identity != nil {
+		jobID = workflowCtx.Identity.JobId
 	}
 	m.lastModelByJob[jobID] = modelID
 
@@ -53,13 +53,13 @@ func (m *modelTrackingAnalyzer) AnalyzeText(ctx context.Context, text string, wo
 	return `{"status":"processed","model":"` + modelID + `"}`, nil
 }
 
-func (m *modelTrackingAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+func (m *modelTrackingAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	jobID := "unknown"
-	if workflowCtx != nil {
-		_, _, jobID = workflowCtx.ExtractIdentity()
+	if workflowCtx != nil && workflowCtx.Identity != nil {
+		jobID = workflowCtx.Identity.JobId
 	}
 	m.lastModelByJob[jobID] = modelID
 
@@ -102,26 +102,23 @@ func TestChallenger_DynamicModelRouting_RaceAndConcurrency(t *testing.T) {
 			defer wg.Done()
 
 			jobID := fmt.Sprintf("job_stress_%d", id)
-			req := &pb.ExecuteWorkflowNodeRequest{
-				Identity: &pb.InfrastructureIdentity{
-					TenantId: "tenant_stress",
-					AppId:    "app_stress",
-					JobId:    jobID,
-				},
-				Storage: &pb.StorageContract{
-					DocumentUri: fmt.Sprintf("internal-store://tenant_stress/app_stress/%s/doc.txt", jobID),
-				},
-				StepId: fmt.Sprintf("STEP_%d", id),
-			}
-
+			payload, _ := structpb.NewStruct(map[string]any{})
+			
 			// Alternate between scanned, structured text, and unflagged requests
 			switch id % 3 {
 			case 0:
-				req.Metadata = map[string]string{"IsScanned": "true"}
+				payload.Fields["IsScanned"] = structpb.NewBoolValue(true)
 			case 1:
-				req.Metadata = map[string]string{"IsScanned": "false"}
+				payload.Fields["IsScanned"] = structpb.NewBoolValue(false)
 			case 2:
 				// No IsScanned flag -> should fall back to resolveModelID(subject)
+			}
+
+			req := &pb.ExecuteTaskRequest{
+				StepId:      fmt.Sprintf("STEP_%d", id),
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: jobID},
+				TaskSubject: "worker.ai.default",
+				Payload:     payload,
 			}
 
 			data, err := proto.Marshal(req)
@@ -229,39 +226,29 @@ func TestChallenger_DynamicModelRouting_EdgeCaseFlags(t *testing.T) {
 			store := &workingStore{data: []byte("test doc payload")}
 			server := NewNatsServer(nil, js, analyzer, store, 1, "test", 1, 1, 8192)
 
-			req := &pb.ExecuteWorkflowNodeRequest{
-				Identity: &pb.InfrastructureIdentity{
-					TenantId: "t_edge",
-					AppId:    "a_edge",
-					JobId:    "j_edge",
-				},
-				Storage: &pb.StorageContract{
-					DocumentUri: "internal-store://t_edge/a_edge/j_edge/doc.txt",
-				},
-				StepId:   "STEP_EDGE",
-				Metadata: tc.metadata,
+			payloadMap := make(map[string]any)
+			for k, v := range tc.nonFuncState {
+				payloadMap[k] = v
 			}
-
-			if tc.funcState != nil {
-				st, err := structpb.NewStruct(tc.funcState)
-				if err != nil {
-					t.Fatalf("failed to create structpb: %v", err)
-				}
-				if req.GlobalState == nil {
-					req.GlobalState = &pb.GlobalState{}
-				}
-				req.GlobalState.Functional = st
+			for k, v := range tc.funcState {
+				payloadMap[k] = v
 			}
+			for k, v := range tc.metadata {
+				if strings.TrimSpace(strings.ToLower(v)) == "true" {
+					payloadMap[k] = true
+				} else if strings.TrimSpace(strings.ToLower(v)) == "false" {
+					payloadMap[k] = false
+				} else {
+					payloadMap[k] = v
+				}
+			}
+			st, _ := structpb.NewStruct(payloadMap)
 
-			if tc.nonFuncState != nil {
-				st, err := structpb.NewStruct(tc.nonFuncState)
-				if err != nil {
-					t.Fatalf("failed to create structpb: %v", err)
-				}
-				if req.GlobalState == nil {
-					req.GlobalState = &pb.GlobalState{}
-				}
-				req.GlobalState.NonFunctional = st
+			req := &pb.ExecuteTaskRequest{
+				StepId:      "STEP_EDGE",
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j_edge"},
+				TaskSubject: "worker.ai.default",
+				Payload:     st,
 			}
 
 			data, _ := proto.Marshal(req)

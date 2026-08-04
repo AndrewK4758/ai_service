@@ -10,19 +10,24 @@ import (
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // TestChallenger_NatsServer_ErrorContractFormat_Comprehensive verifies all error paths enrich ErrorContract with [Step: %s, URI: %s].
 func TestChallenger_NatsServer_ErrorContractFormat_Comprehensive(t *testing.T) {
 	os.Setenv("SERVICE_NAME", "ai_service")
 
+	st := func(uri string) *structpb.Struct {
+		s, _ := structpb.NewStruct(map[string]any{"DocumentUri": uri})
+		return s
+	}
+
 	tests := []struct {
 		name           string
-		req            *pb.ExecuteWorkflowNodeRequest
+		req            *pb.ExecuteTaskRequest
 		store          storageManagerMock
 		analyzerErr    error
 		expectedCode   string
@@ -30,9 +35,11 @@ func TestChallenger_NatsServer_ErrorContractFormat_Comprehensive(t *testing.T) {
 	}{
 		{
 			name: "Nil Storage Manager",
-			req: &pb.ExecuteWorkflowNodeRequest{
-				Storage: &pb.StorageContract{DocumentUri: "internal-store://t/a/j/test.pdf"},
-				StepId:  "STEP_NIL_STORE",
+			req: &pb.ExecuteTaskRequest{
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+				TaskSubject: "worker.ai.default",
+				StepId:      "STEP_NIL_STORE",
+				Payload:     st("internal-store://t/a/j/test.pdf"),
 			},
 			store:          nil,
 			expectedCode:   "STORAGE_FETCH_FAILED",
@@ -40,9 +47,11 @@ func TestChallenger_NatsServer_ErrorContractFormat_Comprehensive(t *testing.T) {
 		},
 		{
 			name: "Storage Fetch Failed Error",
-			req: &pb.ExecuteWorkflowNodeRequest{
-				Storage: &pb.StorageContract{DocumentUri: "internal-store://t/a/j/missing.pdf"},
-				StepId:  "STEP_FETCH_FAIL",
+			req: &pb.ExecuteTaskRequest{
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+				TaskSubject: "worker.ai.default",
+				StepId:      "STEP_FETCH_FAIL",
+				Payload:     st("internal-store://t/a/j/missing.pdf"),
 			},
 			store:          &failingStore{err: fmt.Errorf("connection refused")},
 			expectedCode:   "STORAGE_FETCH_FAILED",
@@ -50,9 +59,11 @@ func TestChallenger_NatsServer_ErrorContractFormat_Comprehensive(t *testing.T) {
 		},
 		{
 			name: "AI Analyzer Execution Failure",
-			req: &pb.ExecuteWorkflowNodeRequest{
-				Storage: &pb.StorageContract{DocumentUri: "internal-store://t/a/j/doc.txt"},
-				StepId:  "STEP_AI_FAIL",
+			req: &pb.ExecuteTaskRequest{
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+				TaskSubject: "worker.ai.default",
+				StepId:      "STEP_AI_FAIL",
+				Payload:     st("internal-store://t/a/j/doc.txt"),
 			},
 			store:          &workingStore{data: []byte("sample text")},
 			analyzerErr:    fmt.Errorf("model context length exceeded"),
@@ -142,14 +153,14 @@ type mockAnalyzerWithErr struct {
 	err error
 }
 
-func (m *mockAnalyzerWithErr) AnalyzeText(ctx context.Context, text string, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+func (m *mockAnalyzerWithErr) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	if m.err != nil {
 		return "", m.err
 	}
 	return `{"status":"ok"}`, nil
 }
 
-func (m *mockAnalyzerWithErr) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *workflowparser.NodeRequestParser, action *pb.ActionDefinition, modelID string) (string, error) {
+func (m *mockAnalyzerWithErr) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	if m.err != nil {
 		return "", m.err
 	}
@@ -174,16 +185,10 @@ func TestChallenger_NatsServer_ConcurrentProcessingStress(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func(id int) {
 			defer wg.Done()
-			req := &pb.ExecuteWorkflowNodeRequest{
-				Identity: &pb.InfrastructureIdentity{
-					TenantId: "t_challenger",
-					AppId:    "a_challenger",
-					JobId:    fmt.Sprintf("j_challenger_%d", id),
-				},
-				Storage: &pb.StorageContract{
-					DocumentUri: fmt.Sprintf("internal-store://t_challenger/a_challenger/j_challenger_%d/doc.txt", id),
-				},
-				StepId: fmt.Sprintf("STEP_%d", id),
+			req := &pb.ExecuteTaskRequest{
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+				TaskSubject: "worker.ai.default",
+				StepId:      fmt.Sprintf("STEP_%d", id),
 			}
 			data, _ := proto.Marshal(req)
 			msg := &mockMsg{

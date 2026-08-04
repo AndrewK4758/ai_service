@@ -19,6 +19,7 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 	os.Setenv("OPENAI_VISION_MODEL", "vision-model-target")
 	os.Setenv("OPENAI_TEXT_MODEL", "text-model-target")
 	os.Setenv("MODEL_ROUTE_DEFAULT", "default-model-target")
+	os.Setenv("MODEL_ROUTE_SUBJECT", "default-model-target")
 	os.Setenv("SERVICE_NAME", "ai_service")
 
 	testCases := []struct {
@@ -31,7 +32,7 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 		{
 			name:          "Metadata takes precedence over Functional State when both exist",
 			metadata:      map[string]string{"IsScanned": "true"},
-			funcState:     map[string]any{"is_scanned": false},
+			funcState:     map[string]any{"IsScanned": false},
 			expectedModel: "vision-model-target",
 		},
 		{
@@ -43,7 +44,7 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 		{
 			name:          "Functional State takes precedence over NonFunctional State",
 			metadata:      nil,
-			funcState:     map[string]any{"is_scanned": true},
+			funcState:     map[string]any{"IsScanned": true},
 			nonFuncState:  map[string]any{"IsScanned": false},
 			expectedModel: "vision-model-target",
 		},
@@ -54,7 +55,7 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 		},
 		{
 			name:          "Ambiguous string values '0'",
-			metadata:      map[string]string{"is_scanned": "0"},
+			metadata:      map[string]string{"IsScanned": "0"},
 			expectedModel: "text-model-target",
 		},
 		{
@@ -64,7 +65,7 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 		},
 		{
 			name:          "Ambiguous string values 'no'",
-			metadata:      map[string]string{"is_scanned": "no"},
+			metadata:      map[string]string{"IsScanned": "no"},
 			expectedModel: "text-model-target",
 		},
 		{
@@ -86,39 +87,29 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 			store := &workingStore{data: []byte("sample pdf content")}
 			server := NewNatsServer(nil, js, analyzer, store, 1, "test", 1, 1, 8192)
 
-			req := &pb.ExecuteWorkflowNodeRequest{
-				Identity: &pb.InfrastructureIdentity{
-					TenantId: "t_ambig",
-					AppId:    "a_ambig",
-					JobId:    "j_ambig",
-				},
-				Storage: &pb.StorageContract{
-					DocumentUri: "internal-store://t_ambig/a_ambig/j_ambig/doc.txt",
-				},
-				StepId:   "STEP_AMBIG",
-				Metadata: tc.metadata,
+			payloadMap := make(map[string]any)
+			for k, v := range tc.nonFuncState {
+				payloadMap[k] = v
 			}
-
-			if tc.funcState != nil {
-				st, err := structpb.NewStruct(tc.funcState)
-				if err != nil {
-					t.Fatalf("failed to build structpb: %v", err)
-				}
-				if req.GlobalState == nil {
-					req.GlobalState = &pb.GlobalState{}
-				}
-				req.GlobalState.Functional = st
+			for k, v := range tc.funcState {
+				payloadMap[k] = v
 			}
+			for k, v := range tc.metadata {
+				if v == "true" {
+					payloadMap[k] = true
+				} else if v == "false" {
+					payloadMap[k] = false
+				} else {
+					payloadMap[k] = v
+				}
+			}
+			st, _ := structpb.NewStruct(payloadMap)
 
-			if tc.nonFuncState != nil {
-				st, err := structpb.NewStruct(tc.nonFuncState)
-				if err != nil {
-					t.Fatalf("failed to build structpb: %v", err)
-				}
-				if req.GlobalState == nil {
-					req.GlobalState = &pb.GlobalState{}
-				}
-				req.GlobalState.NonFunctional = st
+			req := &pb.ExecuteTaskRequest{
+				StepId:      "STEP_AMBIG",
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j_ambig"},
+				TaskSubject: "worker.ai.default",
+				Payload:     st,
 			}
 
 			data, _ := proto.Marshal(req)
@@ -148,9 +139,9 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 
 // TestChallenger2_RapidConcurrentPDFSwitching stress-tests 500 concurrent workers toggling scanned vs text PDF payloads
 func TestChallenger2_RapidConcurrentPDFSwitching(t *testing.T) {
-	os.Setenv("OPENAI_VISION_MODEL", "vision-rapid")
-	os.Setenv("OPENAI_TEXT_MODEL", "text-rapid")
-	os.Setenv("MODEL_ROUTE_DEFAULT", "default-rapid")
+	os.Setenv("OPENAI_VISION_MODEL", "gpt-4o-vision-test")
+	os.Setenv("OPENAI_TEXT_MODEL", "gemma4-extended-test")
+	os.Setenv("MODEL_ROUTE_DEFAULT", "default-llm-test")
 	os.Setenv("SERVICE_NAME", "ai_service")
 
 	js := &mockJS{}
@@ -166,23 +157,14 @@ func TestChallenger2_RapidConcurrentPDFSwitching(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 
-			jobID := fmt.Sprintf("job_rapid_%d", id)
-			req := &pb.ExecuteWorkflowNodeRequest{
-				Identity: &pb.InfrastructureIdentity{
-					TenantId: "t_rapid",
-					AppId:    "a_rapid",
-					JobId:    jobID,
-				},
-				Storage: &pb.StorageContract{
-					DocumentUri: fmt.Sprintf("internal-store://t_rapid/a_rapid/%s/doc.txt", jobID),
-				},
-				StepId: fmt.Sprintf("STEP_%d", id),
-			}
-
-			if id%2 == 0 {
-				req.Metadata = map[string]string{"IsScanned": "true"}
-			} else {
-				req.Metadata = map[string]string{"IsScanned": "false"}
+			payload, _ := structpb.NewStruct(map[string]any{
+				"IsScanned":   id%2 == 0,
+			})
+			req := &pb.ExecuteTaskRequest{
+				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: fmt.Sprintf("j_%d", id)},
+				TaskSubject: "worker.ai.default",
+				StepId:      fmt.Sprintf("STEP_%d", id),
+				Payload:     payload,
 			}
 
 			data, _ := proto.Marshal(req)
