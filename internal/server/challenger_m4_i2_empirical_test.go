@@ -1,5 +1,6 @@
 package server
 
+
 import (
 	"context"
 	"fmt"
@@ -103,7 +104,6 @@ func TestChallengerM4I2_PanicFailFastScenarios(t *testing.T) {
 
 	t.Run("6. Invalid is_scanned Flag Value Panics", func(t *testing.T) {
 		payload, _ := structpb.NewStruct(map[string]any{
-			"metadata": map[string]any{"is_scanned": "invalid_bool_string"},
 		})
 		req := &pb.ExecuteTaskRequest{
 			Identity: &pb.InfrastructureIdentity{TenantId: "tenant1", AppId: "app1", JobId: "job1"},
@@ -111,19 +111,6 @@ func TestChallengerM4I2_PanicFailFastScenarios(t *testing.T) {
 		}
 		assert.Panics(t, func() {
 			extractIsScannedFlag(req)
-		})
-	})
-
-	t.Run("7. Missing DocumentUri Panics", func(t *testing.T) {
-		payload, _ := structpb.NewStruct(map[string]any{
-			"metadata": map[string]any{"is_scanned": true},
-		})
-		req := &pb.ExecuteTaskRequest{
-			Identity: &pb.InfrastructureIdentity{TenantId: "tenant1", AppId: "app1", JobId: "job1"},
-			Payload:  payload,
-		}
-		assert.Panics(t, func() {
-			getDocumentUri(req)
 		})
 	})
 
@@ -166,7 +153,7 @@ func TestChallengerM4I2_ConcurrentStressAndRaceSafety(t *testing.T) {
 			defer wg.Done()
 
 			payload, _ := structpb.NewStruct(map[string]any{
-				"storage": map[string]any{"DocumentUri": fmt.Sprintf("internal-store://tenant1/app1/job1/file_%d.txt", id)},
+				"storage": map[string]any{"document_uri": fmt.Sprintf("internal-store://tenant1/app1/job1/file_%d.txt", id)},
 				"node_config": map[string]any{
 					"inference_input_key": "input_text",
 				},

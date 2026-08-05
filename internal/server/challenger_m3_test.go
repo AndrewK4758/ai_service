@@ -1,5 +1,6 @@
 package server
 
+
 import (
 	"context"
 	"fmt"
@@ -22,11 +23,11 @@ func TestChallenger_NatsServer_ErrorContractFormat_Comprehensive(t *testing.T) {
 
 	st := func(uri string) *structpb.Struct {
 		s, _ := structpb.NewStruct(map[string]any{
+			"node_config": map[string]any{},
 			"global_state": map[string]any{
-				"functional": map[string]any{
-					"document_uri": uri,
-				},
+				"functional": map[string]any{},
 			},
+			"storage": map[string]any{"document_uri": uri},
 		})
 		return s
 	}
@@ -192,6 +193,8 @@ func TestChallenger_NatsServer_ConcurrentProcessingStress(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			st, _ := structpb.NewStruct(map[string]any{
+				"node_config": map[string]any{},
+				"storage": map[string]any{"document_uri": "internal-store://edge/doc.txt"},
 				"global_state": map[string]any{
 					"functional": map[string]any{},
 				},

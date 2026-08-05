@@ -1,5 +1,7 @@
 package ai
 
+import "github.com/AndrewK4758/shared_utils/workflowparser"
+
 import (
 	"bytes"
 	"context"
@@ -336,9 +338,16 @@ func buildResponseFormat(req *pb.ExecuteTaskRequest) *openAIResponseFormat {
 	}
 	schemaStr := ""
 	if req.Payload != nil {
-		if schemaVal, ok := req.Payload.AsMap()["expected_schema"]; ok {
-			if s, isStr := schemaVal.(string); isStr {
-				schemaStr = s
+		parser := workflowparser.NewTaskRequestParser(req)
+		payload := parser.MustGetExecuteTaskPayload()
+		if payload.NodeConfig != nil {
+			if payload.NodeConfig.ExpectedSchema != "" {
+				schemaStr = payload.NodeConfig.ExpectedSchema
+			} else if payload.NodeConfig.ExpectedSchemaStruct != nil {
+				b, _ := payload.NodeConfig.ExpectedSchemaStruct.MarshalJSON()
+				if len(b) > 0 && string(b) != "{}" {
+					schemaStr = string(b)
+				}
 			}
 		}
 	}
@@ -395,12 +404,23 @@ func enforceDeterministicValidation(responseStr string, req *pb.ExecuteTaskReque
 		return responseStr
 	}
 
-	schemaVal, ok := req.Payload.AsMap()["expected_schema"]
-	if !ok {
+	parser := workflowparser.NewTaskRequestParser(req)
+	payload := parser.MustGetExecuteTaskPayload()
+	if payload.NodeConfig == nil {
 		return responseStr
 	}
-	schemaStr, isStr := schemaVal.(string)
-	if !isStr || schemaStr == "" {
+
+	schemaStr := ""
+	if payload.NodeConfig.ExpectedSchema != "" {
+		schemaStr = payload.NodeConfig.ExpectedSchema
+	} else if payload.NodeConfig.ExpectedSchemaStruct != nil {
+		b, _ := payload.NodeConfig.ExpectedSchemaStruct.MarshalJSON()
+		if len(b) > 0 && string(b) != "{}" {
+			schemaStr = string(b)
+		}
+	}
+
+	if schemaStr == "" {
 		return responseStr
 	}
 

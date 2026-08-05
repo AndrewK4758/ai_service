@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/AndrewK4758/shared_utils/envutil"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 
 	pb "github.com/AndrewK4758/shared_protos"
 )
@@ -17,29 +18,31 @@ func buildPrompt(req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, docume
 	}
 
 	if req != nil && req.Payload != nil {
-		payloadMap := req.Payload.AsMap()
-		
-		// Extract System Instructions from Payload if provided by client
-		if sysInstrVal, ok := payloadMap["system_instructions"]; ok {
-			if sysInstrStr, isStr := sysInstrVal.(string); isStr && sysInstrStr != "" {
-				prompt += fmt.Sprintf("\nGlobal Job Instructions:\n%s\n", sysInstrStr)
-			}
-		}
+		parser := workflowparser.NewTaskRequestParser(req)
+		payload := parser.MustGetExecuteTaskPayload()
 
-		// Extract Schema from Payload if provided by client
-		if schemaVal, ok := payloadMap["expected_schema"]; ok {
-			if schemaStr, isStr := schemaVal.(string); isStr && schemaStr != "" {
-				prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", schemaStr)
+		if payload.NodeConfig != nil {
+			if payload.NodeConfig.SystemInstructions != "" {
+				prompt += fmt.Sprintf("\nGlobal Job Instructions:\n%s\n", payload.NodeConfig.SystemInstructions)
 			}
-		}
-
-		// Extract Inference Input from Payload
-		if infInputVal, ok := payloadMap["inference_input"]; ok {
-			if infInputStr, isStr := infInputVal.(string); isStr && infInputStr != "" {
-				if documentContent != "" {
-					documentContent += "\n\n"
+			
+			if payload.NodeConfig.ExpectedSchema != "" {
+				prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", payload.NodeConfig.ExpectedSchema)
+			} else if payload.NodeConfig.ExpectedSchemaStruct != nil {
+				b, _ := payload.NodeConfig.ExpectedSchemaStruct.MarshalJSON()
+				if len(b) > 0 && string(b) != "{}" {
+					prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", string(b))
 				}
-				documentContent += "Additional Input:\n" + infInputStr
+			}
+
+			if payload.NodeConfig.InferenceInputKey != "" {
+				infInputStr := parser.MustExtractDynamicInputStrict(payload.NodeConfig.InferenceInputKey, "")
+				if infInputStr != "" {
+					if documentContent != "" {
+						documentContent += "\n\n"
+					}
+					documentContent += "Additional Input:\n" + infInputStr
+				}
 			}
 		}
 	}

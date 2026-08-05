@@ -1,5 +1,6 @@
 package server
 
+
 import (
 	"context"
 	"fmt"
@@ -91,10 +92,10 @@ func TestResiliency_NatsServer_JITMemoryDiscarding(t *testing.T) {
 	hdr.Set("Reply-Subject", "test.reply.jit")
 
 	st, _ := structpb.NewStruct(map[string]any{
+		"node_config": map[string]any{},
+		"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.txt"},
 		"global_state": map[string]any{
-			"functional": map[string]any{
-				"document_uri": "internal-store://t/a/j/mem.txt",
-			},
+			"functional": map[string]any{},
 		},
 	})
 	req := &pb.ExecuteTaskRequest{
@@ -144,10 +145,10 @@ func TestResiliency_NatsServer_HighConcurrencyStress(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			st, _ := structpb.NewStruct(map[string]any{
+				"node_config": map[string]any{},
+				"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.txt"},
 				"global_state": map[string]any{
-					"functional": map[string]any{
-						"document_uri": fmt.Sprintf("internal-store://t/a/j/doc_%d.txt", id),
-					},
+					"functional": map[string]any{},
 				},
 			})
 			req := &pb.ExecuteTaskRequest{
@@ -211,11 +212,11 @@ func TestResiliency_ErrorFormatVerification(t *testing.T) {
 			hdr.Set("Reply-Subject", "test.reply.err")
 
 			st, _ := structpb.NewStruct(map[string]any{
+				"node_config": map[string]any{},
 				"global_state": map[string]any{
-					"functional": map[string]any{
-						"document_uri": tt.docUri,
-					},
+					"functional": map[string]any{},
 				},
+				"storage": map[string]any{"document_uri": tt.docUri},
 			})
 			req := &pb.ExecuteTaskRequest{
 				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},

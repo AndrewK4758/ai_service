@@ -1,5 +1,6 @@
 package server
 
+
 import (
 	"context"
 	"fmt"
@@ -26,20 +27,9 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 		name          string
 		nodeConfig    map[string]any
 		funcState     map[string]any
+		storage       map[string]any
 		expectedModel string
 	}{
-		{
-			name:          "node_config takes precedence over global_state.functional",
-			nodeConfig:    map[string]any{"is_scanned": true},
-			funcState:     map[string]any{"is_scanned": false},
-			expectedModel: "vision-model-target",
-		},
-		{
-			name:          "node_config false takes precedence over global_state.functional true",
-			nodeConfig:    map[string]any{"is_scanned": false},
-			funcState:     map[string]any{"is_scanned": true},
-			expectedModel: "text-model-target",
-		},
 		{
 			name:          "global_state.functional true uses vision model",
 			nodeConfig:    nil,
@@ -63,7 +53,7 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 
 			globalState := map[string]any{
 				"functional": map[string]any{
-					"document_uri": "internal-store://ambig/doc.txt",
+					
 				},
 			}
 			if tc.funcState != nil {
@@ -77,6 +67,11 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 			}
 			if tc.nodeConfig != nil {
 				payloadMap["node_config"] = tc.nodeConfig
+			} else {
+				payloadMap["node_config"] = map[string]any{}
+			}
+			if tc.storage != nil {
+				payloadMap["storage"] = tc.storage
 			}
 
 			st, _ := structpb.NewStruct(payloadMap)
@@ -135,6 +130,8 @@ func TestChallenger2_RapidConcurrentPDFSwitching(t *testing.T) {
 
 			isScanned := id%2 == 0
 			payload, _ := structpb.NewStruct(map[string]any{
+				"node_config": map[string]any{},
+				"storage": map[string]any{"document_uri": "internal-store://edge/doc.txt"},
 				"global_state": map[string]any{
 					"functional": map[string]any{
 						"is_scanned": isScanned,

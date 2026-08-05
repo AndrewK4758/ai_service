@@ -5,18 +5,36 @@ import (
 	"testing"
 
 	pb "github.com/AndrewK4758/shared_protos"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestBuildPrompt(t *testing.T) {
-	stateMap := map[string]any{
-		"system_instructions": "Perform audit check",
-		"expected_schema":     `{"type":"object"}`,
-		"inference_input":     "Input Data: 123",
+	payload := &pb.ExecuteTaskPayload{
+		NodeConfig: &pb.NodeConfiguration{
+			SystemInstructions: "Perform audit check",
+			ExpectedSchema:     `{"type":"object"}`,
+			InferenceInputKey:  "my_input",
+		},
+		GlobalState: &structpb.Struct{
+			Fields: map[string]*structpb.Value{
+				"functional": structpb.NewStructValue(&structpb.Struct{
+					Fields: map[string]*structpb.Value{
+						"my_input": structpb.NewStringValue("Input Data: 123"),
+					},
+				}),
+			},
+		},
 	}
 
-	st, _ := structpb.NewStruct(stateMap)
-	req := &pb.ExecuteTaskRequest{Payload: st}
+	b, _ := protojson.Marshal(payload)
+	st := &structpb.Struct{}
+	st.UnmarshalJSON(b)
+
+	req := &pb.ExecuteTaskRequest{
+		Identity: &pb.InfrastructureIdentity{TenantId: "t", AppId: "a", JobId: "j"},
+		Payload:  st,
+	}
 
 	action := &pb.ActionDefinition{
 		Name:   "AuditTask",

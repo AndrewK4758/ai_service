@@ -120,11 +120,11 @@ func TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths(t *testin
 		hdr.Set("Reply-Subject", "test.reply.adv")
 
 		payload, _ := structpb.NewStruct(map[string]any{
+			"node_config": map[string]any{},
 			"global_state": map[string]any{
-				"functional": map[string]any{
-					"document_uri": "internal-store://t_adv/a_adv/j_adv/doc.txt",
-				},
+				"functional": map[string]any{},
 			},
+			"storage": map[string]any{"document_uri": "internal-store://edge/doc.txt"},
 		})
 		req := &pb.ExecuteTaskRequest{
 			Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
@@ -160,7 +160,7 @@ func TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths(t *testin
 			t.Fatalf("expected ErrorContract to be populated")
 		}
 
-		expectedPrefix := "[Step: ADV_AI_STEP, URI: internal-store://t_adv/a_adv/j_adv/doc.txt]"
+		expectedPrefix := "[Step: ADV_AI_STEP, URI: internal-store://edge/doc.txt]"
 		if !strings.HasPrefix(resp.ErrorContract.Message, expectedPrefix) {
 			t.Errorf("error contract message does not start with expected prefix %q, got: %q", expectedPrefix, resp.ErrorContract.Message)
 		}
@@ -194,11 +194,11 @@ func TestAdversarial_AIService_JITByteDiscardAndMemoryAudit(t *testing.T) {
 	// Run 20 sequential JIT fetches of 5MB files
 	for i := 0; i < 20; i++ {
 		payload, _ := structpb.NewStruct(map[string]any{
+			"node_config": map[string]any{},
 			"global_state": map[string]any{
-				"functional": map[string]any{
-					"document_uri": "internal-store://mem_test/doc.txt",
-				},
+				"functional": map[string]any{},
 			},
+			"storage": map[string]any{"document_uri": "internal-store://mem_test/doc.txt"},
 		})
 		req := &pb.ExecuteTaskRequest{
 			Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
@@ -251,11 +251,11 @@ func TestAdversarial_AIService_HighConcurrencyStress(t *testing.T) {
 			defer wg.Done()
 
 			payload, _ := structpb.NewStruct(map[string]any{
+				"node_config": map[string]any{},
 				"global_state": map[string]any{
-					"functional": map[string]any{
-						"document_uri": "internal-store://mem_test/doc.txt",
-					},
+					"functional": map[string]any{},
 				},
+				"storage": map[string]any{"document_uri": "internal-store://mem_test/doc.txt"},
 			})
 			req := &pb.ExecuteTaskRequest{
 				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},

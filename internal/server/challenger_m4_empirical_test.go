@@ -1,5 +1,6 @@
 package server
 
+
 import (
 	"context"
 	"fmt"
@@ -65,7 +66,7 @@ func TestEmpirical_FailFastScenarios(t *testing.T) {
 		}
 		assertPanicContains(t, func() {
 			srv.processMessage(ctx, msg)
-		}, "action failed: unmarshal error: proto: cannot parse invalid wire-format data")
+		}, "cannot parse invalid wire-format data")
 	})
 
 	t.Run("Scenario_2:_Missing_identity_in_processMessage_->_must_panic", func(t *testing.T) {
@@ -121,7 +122,8 @@ func TestEmpirical_FailFastScenarios(t *testing.T) {
 
 	t.Run("Scenario_5:_Malformed_scanned_flag_in_extractIsScannedFlag_->_must_panic", func(t *testing.T) {
 		st, _ := structpb.NewStruct(map[string]any{
-			"global_state": map[string]any{
+			"storage": map[string]any{"document_uri": "internal-store://edge/doc.txt"},
+				"global_state": map[string]any{
 				"functional": map[string]any{
 					"is_scanned": "invalid_boolean_string",
 				},

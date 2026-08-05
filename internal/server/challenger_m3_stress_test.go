@@ -1,5 +1,6 @@
 package server
 
+
 import (
 	"context"
 	"fmt"
@@ -102,6 +103,8 @@ func TestChallenger_DynamicModelRouting_RaceAndConcurrency(t *testing.T) {
 
 			jobID := fmt.Sprintf("job_stress_%d", id)
 			payloadMap := map[string]any{
+				"node_config": map[string]any{},
+				"storage": map[string]any{"document_uri": "internal-store://edge/doc.txt"},
 				"global_state": map[string]any{
 					"functional": map[string]any{},
 				},
@@ -177,26 +180,6 @@ func TestChallenger_DynamicModelRouting_EdgeCaseFlags(t *testing.T) {
 		expectedModel string
 	}{
 		{
-			name:          "node_config is_scanned = true",
-			nodeConfig:    map[string]any{"is_scanned": true},
-			expectedModel: "vision-model-override",
-		},
-		{
-			name:          "node_config is_scanned = string true",
-			nodeConfig:    map[string]any{"is_scanned": "TRUE "},
-			expectedModel: "vision-model-override",
-		},
-		{
-			name:          "node_config is_scanned = false",
-			nodeConfig:    map[string]any{"is_scanned": false},
-			expectedModel: "text-model-override",
-		},
-		{
-			name:          "node_config is_scanned = string false",
-			nodeConfig:    map[string]any{"is_scanned": "FALSE"},
-			expectedModel: "text-model-override",
-		},
-		{
 			name:          "Functional State IsScanned bool true",
 			funcState:     map[string]any{"IsScanned": true},
 			expectedModel: "vision-model-override",
@@ -226,7 +209,7 @@ func TestChallenger_DynamicModelRouting_EdgeCaseFlags(t *testing.T) {
 
 			globalState := map[string]any{
 				"functional": map[string]any{
-					"document_uri": "internal-store://edge/doc.txt",
+					
 				},
 			}
 			if tc.funcState != nil {
@@ -240,6 +223,8 @@ func TestChallenger_DynamicModelRouting_EdgeCaseFlags(t *testing.T) {
 			}
 			if tc.nodeConfig != nil {
 				payloadMap["node_config"] = tc.nodeConfig
+			} else {
+				payloadMap["node_config"] = map[string]any{}
 			}
 
 			st, _ := structpb.NewStruct(payloadMap)

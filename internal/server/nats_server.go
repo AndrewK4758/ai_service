@@ -807,32 +807,7 @@ func extractIsScannedFlag(req *pb.ExecuteTaskRequest) (bool, bool) {
 	if err != nil {
 		panic(fmt.Errorf("action failed: %v", err))
 	}
-	// 1. Check node_config first
-	if req.Payload != nil {
-		payloadMap := req.Payload.AsMap()
-		if nodeConfigRaw, ok := payloadMap["node_config"]; ok {
-			if nodeConfig, ok := nodeConfigRaw.(map[string]any); ok {
-				keys := []string{"is_scanned", "IsScanned"}
-				for _, k := range keys {
-					if v, ok := nodeConfig[k]; ok {
-						if b, ok := v.(bool); ok {
-							return b, true
-						}
-						if s, ok := v.(string); ok {
-							s = strings.TrimSpace(strings.ToLower(s))
-							if s == "yes" || s == "true" || s == "1" {
-								return true, true
-							} else if s == "no" || s == "false" || s == "0" {
-								return false, true
-							}
-						}
-					}
-				}
-			}
-		}
-	}
 
-	// 2. Check global_state.functional
 	keys := []string{"is_scanned", "IsScanned"}
 	for _, k := range keys {
 		v, ok := funcState[k]
@@ -846,16 +821,11 @@ func extractIsScannedFlag(req *pb.ExecuteTaskRequest) (bool, bool) {
 			s = strings.TrimSpace(strings.ToLower(s))
 			if s == "yes" || s == "true" || s == "1" {
 				return true, true
-			}
-			if s == "no" || s == "false" || s == "0" {
+			} else if s == "no" || s == "false" || s == "0" {
 				return false, true
 			}
-			if parsed, err := strconv.ParseBool(s); err == nil {
-				return parsed, true
-			}
-			panic(fmt.Errorf("action failed: invalid is_scanned flag value"))
 		}
-		panic(fmt.Errorf("action failed: invalid is_scanned flag type"))
+		panic(fmt.Errorf("action failed: invalid is_scanned flag value"))
 	}
 	return false, false
 }
@@ -864,17 +834,12 @@ func getDocumentUri(req *pb.ExecuteTaskRequest) string {
 	if req == nil || req.Payload == nil {
 		panic(fmt.Errorf("action failed: missing payload"))
 	}
+	
 	parser := workflowparser.NewTaskRequestParser(req)
-	funcState, err := parser.GetFunctionalState()
-	if err != nil {
-		panic(fmt.Errorf("action failed: %v", err))
+	executeTaskPayload := parser.MustGetExecuteTaskPayload()
+	if executeTaskPayload != nil && executeTaskPayload.Storage != nil {
+		return executeTaskPayload.Storage.DocumentUri
 	}
 	
-	keys := []string{"document_uri", "DocumentUri"}
-	for _, k := range keys {
-		if v, ok := funcState[k].(string); ok {
-			return v
-		}
-	}
 	return ""
 }

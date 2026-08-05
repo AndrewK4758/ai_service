@@ -1,5 +1,6 @@
 package server
 
+
 import (
 	"testing"
 
@@ -45,31 +46,17 @@ func TestM2Challenger_AIService_IsScannedRootIgnored(t *testing.T) {
 	}
 }
 
-// TestM2Challenger_AIService_DocumentUriRootIgnored verifies that root payload DocumentUri is ignored
-func TestM2Challenger_AIService_DocumentUriRootIgnored(t *testing.T) {
-	// Root level DocumentUri = "s3://root/file.pdf", but storage, global_state, metadata, node_config have no DocumentUri
+// TestM2Challenger_AIService_DocumentUriRootSupported verifies that root payload DocumentUri is supported
+func TestM2Challenger_AIService_DocumentUriRootSupported(t *testing.T) {
 	rootPayload := createTestPayloadStruct(map[string]interface{}{
-		"DocumentUri":  "s3://root/file.pdf",
-		"document_uri": "s3://root/file.pdf",
+		"node_config": map[string]interface{}{},
+		"global_state": map[string]interface{}{},
+		"storage": map[string]interface{}{"document_uri": "s3://root/file.pdf"},
 	})
 	req := &pb.ExecuteTaskRequest{Payload: rootPayload}
 
-	assert.Panics(t, func() {
-		_ = getDocumentUri(req)
-	})
-
-	// Valid DocumentUri inside global_state.functional
-	validPayload := createTestPayloadStruct(map[string]interface{}{
-		"global_state": map[string]interface{}{
-			"functional": map[string]interface{}{
-				"document_uri": "s3://valid/storage/file.pdf",
-			},
-		},
-	})
-	reqValid := &pb.ExecuteTaskRequest{Payload: validPayload}
-
-	uriValid := getDocumentUri(reqValid)
-	if uriValid != "s3://valid/storage/file.pdf" {
-		t.Fatalf("expected getDocumentUri to find 's3://valid/storage/file.pdf', got %q", uriValid)
+	uriRoot := getDocumentUri(req)
+	if uriRoot != "s3://root/file.pdf" {
+		t.Errorf("expected getDocumentUri to find 's3://root/file.pdf', got %q", uriRoot)
 	}
 }

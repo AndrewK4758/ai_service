@@ -1,5 +1,6 @@
 package server
 
+
 import (
 	"context"
 	"fmt"
@@ -81,6 +82,7 @@ func (m *mockStorageManager) SaveFile(ctx context.Context, relativePath string, 
 type mockMsg struct {
 	mu         sync.Mutex
 	data       []byte
+	subject    string
 	headers    nats.Header
 	metadata   *jetstream.MsgMetadata
 	metaErr    error
@@ -93,7 +95,12 @@ type mockMsg struct {
 func (m *mockMsg) Metadata() (*jetstream.MsgMetadata, error) { return m.metadata, m.metaErr }
 func (m *mockMsg) Data() []byte                              { return m.data }
 func (m *mockMsg) Headers() nats.Header                      { return m.headers }
-func (m *mockMsg) Subject() string                           { return "test.subject" }
+func (m *mockMsg) Subject() string { 
+	if m.subject != "" {
+		return m.subject
+	}
+	return "worker.ai.default.a1.t1.j1" 
+}
 func (m *mockMsg) Reply() string                             { return "" }
 func (m *mockMsg) Ack() error {
 	m.mu.Lock()
@@ -148,6 +155,7 @@ func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1, 8192)
 
 	payload, _ := structpb.NewStruct(map[string]any{
+		"node_config": map[string]any{},
 		"global_state": map[string]any{
 			"functional": map[string]any{},
 		},
@@ -174,7 +182,10 @@ func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 
 func TestExtractIsScannedFlag(t *testing.T) {
 	st, _ := structpb.NewStruct(map[string]any{
-		"global_state": map[string]any{
+		
+		"node_config": map[string]any{},
+		"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
+				"global_state": map[string]any{
 			"functional": map[string]any{
 				"is_scanned": true,
 			},
@@ -227,10 +238,11 @@ func TestNatsServer_ModelRoutingOverride_ScannedPDF(t *testing.T) {
 	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1, 8192)
 
 	st, _ := structpb.NewStruct(map[string]any{
+		"node_config": map[string]any{},
+		"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
 		"global_state": map[string]any{
 			"functional": map[string]any{
-				"is_scanned":   true,
-				"document_uri": "internal-store://t/a/j/doc.pdf",
+				"is_scanned": true,
 			},
 		},
 	})
@@ -280,10 +292,13 @@ func TestNatsServer_ModelRoutingOverride_StructuredTextPDF(t *testing.T) {
 	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1, 8192)
 
 	st, _ := structpb.NewStruct(map[string]any{
-		"global_state": map[string]any{
+		
+		"node_config": map[string]any{},
+		"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
+				"global_state": map[string]any{
 			"functional": map[string]any{
 				"is_scanned":   false,
-				"document_uri": "internal-store://t/a/j/doc.pdf",
+				
 			},
 		},
 	})
@@ -334,9 +349,12 @@ func TestNatsServer_ModelRoutingOverride_HasFlagFalse_Fallback(t *testing.T) {
 	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1, 8192)
 
 	st, _ := structpb.NewStruct(map[string]any{
-		"global_state": map[string]any{
+		
+		"node_config": map[string]any{},
+		"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
+				"global_state": map[string]any{
 			"functional": map[string]any{
-				"document_uri": "internal-store://t/a/j/doc.pdf",
+				
 			},
 		},
 	})
