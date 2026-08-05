@@ -21,7 +21,13 @@ func TestChallenger_NatsServer_ErrorContractFormat_Comprehensive(t *testing.T) {
 	os.Setenv("SERVICE_NAME", "ai_service")
 
 	st := func(uri string) *structpb.Struct {
-		s, _ := structpb.NewStruct(map[string]any{"DocumentUri": uri})
+		s, _ := structpb.NewStruct(map[string]any{
+			"global_state": map[string]any{
+				"functional": map[string]any{
+					"document_uri": uri,
+				},
+			},
+		})
 		return s
 	}
 
@@ -185,10 +191,16 @@ func TestChallenger_NatsServer_ConcurrentProcessingStress(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func(id int) {
 			defer wg.Done()
+			st, _ := structpb.NewStruct(map[string]any{
+				"global_state": map[string]any{
+					"functional": map[string]any{},
+				},
+			})
 			req := &pb.ExecuteTaskRequest{
 				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 				TaskSubject: "worker.ai.default",
 				StepId:      fmt.Sprintf("STEP_%d", id),
+				Payload:     st,
 			}
 			data, _ := proto.Marshal(req)
 			msg := &mockMsg{

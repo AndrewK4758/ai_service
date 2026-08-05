@@ -49,7 +49,7 @@ func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.E
 
 	m := modelID
 	if m == "" {
-		m = v.textModel
+		panic(fmt.Errorf("missing modelID in Vertex AnalyzeText"))
 	}
 
 	model := v.client.GenerativeModel(m)
@@ -86,7 +86,7 @@ func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 
 	m := modelID
 	if m == "" {
-		m = v.visionModel
+		panic(fmt.Errorf("missing modelID in Vertex AnalyzeImage"))
 	}
 
 	model := v.client.GenerativeModel(m)

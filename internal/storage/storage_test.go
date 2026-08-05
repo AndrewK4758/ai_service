@@ -10,7 +10,13 @@ import (
 	pb "github.com/AndrewK4758/shared_protos"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"os"
 )
+
+func init() {
+	os.Setenv("STORAGE_FETCH_RETRY_COUNT", "3")
+	os.Setenv("STORAGE_FETCH_RETRY_SLEEP_MS", "1")
+}
 
 type mockStorageGatewayClient struct {
 	uploadStream   *mockUploadStream

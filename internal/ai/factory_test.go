@@ -68,6 +68,8 @@ func TestNewAnalyzerFactory(t *testing.T) {
 			defer os.Unsetenv("VERTEX_LOCATION")
 
 			config := DefaultConfig("fake-token")
+			config.AnthropicBaseURL = "https://test.anthropic.com"
+			config.AnthropicVersion = "2023-06-01"
 			analyzer, err := NewAnalyzerFactory(config)
 
 			if (err != nil) != tt.expectErr {

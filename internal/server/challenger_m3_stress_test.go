@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -102,17 +101,22 @@ func TestChallenger_DynamicModelRouting_RaceAndConcurrency(t *testing.T) {
 			defer wg.Done()
 
 			jobID := fmt.Sprintf("job_stress_%d", id)
-			payload, _ := structpb.NewStruct(map[string]any{})
+			payloadMap := map[string]any{
+				"global_state": map[string]any{
+					"functional": map[string]any{},
+				},
+			}
 			
-			// Alternate between scanned, structured text, and unflagged requests
 			switch id % 3 {
 			case 0:
-				payload.Fields["IsScanned"] = structpb.NewBoolValue(true)
+				payloadMap["global_state"].(map[string]any)["functional"].(map[string]any)["is_scanned"] = true
 			case 1:
-				payload.Fields["IsScanned"] = structpb.NewBoolValue(false)
+				payloadMap["global_state"].(map[string]any)["functional"].(map[string]any)["is_scanned"] = false
 			case 2:
 				// No IsScanned flag -> should fall back to resolveModelID(subject)
 			}
+			
+			payload, _ := structpb.NewStruct(payloadMap)
 
 			req := &pb.ExecuteTaskRequest{
 				StepId:      fmt.Sprintf("STEP_%d", id),
@@ -168,29 +172,28 @@ func TestChallenger_DynamicModelRouting_EdgeCaseFlags(t *testing.T) {
 
 	testCases := []struct {
 		name          string
-		metadata      map[string]string
+		nodeConfig    map[string]any
 		funcState     map[string]any
-		nonFuncState  map[string]any
 		expectedModel string
 	}{
 		{
-			name:          "Metadata IsScanned = true",
-			metadata:      map[string]string{"IsScanned": "true"},
+			name:          "node_config is_scanned = true",
+			nodeConfig:    map[string]any{"is_scanned": true},
 			expectedModel: "vision-model-override",
 		},
 		{
-			name:          "Metadata is_scanned = true",
-			metadata:      map[string]string{"is_scanned": "TRUE "},
+			name:          "node_config is_scanned = string true",
+			nodeConfig:    map[string]any{"is_scanned": "TRUE "},
 			expectedModel: "vision-model-override",
 		},
 		{
-			name:          "Metadata IsScanned = false",
-			metadata:      map[string]string{"IsScanned": "false"},
+			name:          "node_config is_scanned = false",
+			nodeConfig:    map[string]any{"is_scanned": false},
 			expectedModel: "text-model-override",
 		},
 		{
-			name:          "Metadata is_scanned = false",
-			metadata:      map[string]string{"is_scanned": "FALSE"},
+			name:          "node_config is_scanned = string false",
+			nodeConfig:    map[string]any{"is_scanned": "FALSE"},
 			expectedModel: "text-model-override",
 		},
 		{
@@ -204,17 +207,12 @@ func TestChallenger_DynamicModelRouting_EdgeCaseFlags(t *testing.T) {
 			expectedModel: "text-model-override",
 		},
 		{
-			name:          "Non-Functional State IsScanned string true",
-			nonFuncState:  map[string]any{"IsScanned": "true"},
-			expectedModel: "vision-model-override",
-		},
-		{
 			name:          "Malformed string flag ignored (falls back to default)",
-			metadata:      map[string]string{"IsScanned": "not_a_bool"},
+			nodeConfig:    map[string]any{"IsScanned": "not_a_bool"},
 			expectedModel: "default-model",
 		},
 		{
-			name:          "Empty metadata & state (falls back to default)",
+			name:          "Empty configs (falls back to default)",
 			expectedModel: "default-model",
 		},
 	}
@@ -226,22 +224,24 @@ func TestChallenger_DynamicModelRouting_EdgeCaseFlags(t *testing.T) {
 			store := &workingStore{data: []byte("test doc payload")}
 			server := NewNatsServer(nil, js, analyzer, store, 1, "test", 1, 1, 8192)
 
-			payloadMap := make(map[string]any)
-			for k, v := range tc.nonFuncState {
-				payloadMap[k] = v
+			globalState := map[string]any{
+				"functional": map[string]any{
+					"document_uri": "internal-store://edge/doc.txt",
+				},
 			}
-			for k, v := range tc.funcState {
-				payloadMap[k] = v
-			}
-			for k, v := range tc.metadata {
-				if strings.TrimSpace(strings.ToLower(v)) == "true" {
-					payloadMap[k] = true
-				} else if strings.TrimSpace(strings.ToLower(v)) == "false" {
-					payloadMap[k] = false
-				} else {
-					payloadMap[k] = v
+			if tc.funcState != nil {
+				for k, v := range tc.funcState {
+					globalState["functional"].(map[string]any)[k] = v
 				}
 			}
+
+			payloadMap := map[string]any{
+				"global_state": globalState,
+			}
+			if tc.nodeConfig != nil {
+				payloadMap["node_config"] = tc.nodeConfig
+			}
+
 			st, _ := structpb.NewStruct(payloadMap)
 
 			req := &pb.ExecuteTaskRequest{

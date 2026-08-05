@@ -168,7 +168,7 @@ func TestOpenAIAnalyzer_AnalyzeImage_VisionBaseURL(t *testing.T) {
 	config.VisionModel = "glm-ocr"
 	analyzer := NewOpenAIAnalyzerWithConfig(config)
 
-	got, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fakeimage")}, nil, nil, "")
+	got, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fakeimage")}, nil, nil, "glm-ocr")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

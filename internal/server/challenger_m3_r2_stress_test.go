@@ -24,59 +24,33 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 
 	testCases := []struct {
 		name          string
-		metadata      map[string]string
+		nodeConfig    map[string]any
 		funcState     map[string]any
-		nonFuncState  map[string]any
 		expectedModel string
 	}{
 		{
-			name:          "Metadata takes precedence over Functional State when both exist",
-			metadata:      map[string]string{"IsScanned": "true"},
-			funcState:     map[string]any{"IsScanned": false},
+			name:          "node_config takes precedence over global_state.functional",
+			nodeConfig:    map[string]any{"is_scanned": true},
+			funcState:     map[string]any{"is_scanned": false},
 			expectedModel: "vision-model-target",
 		},
 		{
-			name:          "Metadata false takes precedence over Functional State true",
-			metadata:      map[string]string{"IsScanned": "false"},
-			funcState:     map[string]any{"IsScanned": true},
+			name:          "node_config false takes precedence over global_state.functional true",
+			nodeConfig:    map[string]any{"is_scanned": false},
+			funcState:     map[string]any{"is_scanned": true},
 			expectedModel: "text-model-target",
 		},
 		{
-			name:          "Functional State takes precedence over NonFunctional State",
-			metadata:      nil,
-			funcState:     map[string]any{"IsScanned": true},
-			nonFuncState:  map[string]any{"IsScanned": false},
+			name:          "global_state.functional true uses vision model",
+			nodeConfig:    nil,
+			funcState:     map[string]any{"is_scanned": true},
 			expectedModel: "vision-model-target",
 		},
 		{
-			name:          "Ambiguous string values '1' vs '0'",
-			metadata:      map[string]string{"IsScanned": "1"},
-			expectedModel: "vision-model-target",
-		},
-		{
-			name:          "Ambiguous string values '0'",
-			metadata:      map[string]string{"IsScanned": "0"},
+			name:          "global_state.functional false uses text model",
+			nodeConfig:    nil,
+			funcState:     map[string]any{"is_scanned": false},
 			expectedModel: "text-model-target",
-		},
-		{
-			name:          "Ambiguous string values 'yes' vs 'no'",
-			metadata:      map[string]string{"IsScanned": "yes"},
-			expectedModel: "vision-model-target",
-		},
-		{
-			name:          "Ambiguous string values 'no'",
-			metadata:      map[string]string{"IsScanned": "no"},
-			expectedModel: "text-model-target",
-		},
-		{
-			name:          "Invalid string fallback to default model",
-			metadata:      map[string]string{"IsScanned": "invalid_value"},
-			expectedModel: "default-model-target",
-		},
-		{
-			name:          "Nil Metadata and empty state falls back to default model",
-			metadata:      nil,
-			expectedModel: "default-model-target",
 		},
 	}
 
@@ -87,22 +61,24 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 			store := &workingStore{data: []byte("sample pdf content")}
 			server := NewNatsServer(nil, js, analyzer, store, 1, "test", 1, 1, 8192)
 
-			payloadMap := make(map[string]any)
-			for k, v := range tc.nonFuncState {
-				payloadMap[k] = v
+			globalState := map[string]any{
+				"functional": map[string]any{
+					"document_uri": "internal-store://ambig/doc.txt",
+				},
 			}
-			for k, v := range tc.funcState {
-				payloadMap[k] = v
-			}
-			for k, v := range tc.metadata {
-				if v == "true" {
-					payloadMap[k] = true
-				} else if v == "false" {
-					payloadMap[k] = false
-				} else {
-					payloadMap[k] = v
+			if tc.funcState != nil {
+				for k, v := range tc.funcState {
+					globalState["functional"].(map[string]any)[k] = v
 				}
 			}
+
+			payloadMap := map[string]any{
+				"global_state": globalState,
+			}
+			if tc.nodeConfig != nil {
+				payloadMap["node_config"] = tc.nodeConfig
+			}
+
 			st, _ := structpb.NewStruct(payloadMap)
 
 			req := &pb.ExecuteTaskRequest{
@@ -157,9 +133,15 @@ func TestChallenger2_RapidConcurrentPDFSwitching(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 
+			isScanned := id%2 == 0
 			payload, _ := structpb.NewStruct(map[string]any{
-				"IsScanned":   id%2 == 0,
+				"global_state": map[string]any{
+					"functional": map[string]any{
+						"is_scanned": isScanned,
+					},
+				},
 			})
+
 			req := &pb.ExecuteTaskRequest{
 				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: fmt.Sprintf("j_%d", id)},
 				TaskSubject: "worker.ai.default",

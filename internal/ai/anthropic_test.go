@@ -139,6 +139,7 @@ func TestAnthropicAnalyzer_AnalyzeImage(t *testing.T) {
 		AnthropicBaseURL:   ts.URL,
 		AnthropicVersion:   "2023-06-01",
 		AnthropicVisionModel: "claude-3-5-sonnet-20241022",
+		MaxTokens:          1024,
 		HTTPClient:         ts.Client(),
 	}
 
@@ -183,6 +184,8 @@ func TestAnthropicAnalyzer_ErrorHandling(t *testing.T) {
 	config := OpenAIConfig{
 		AnthropicAPIKey:  "key",
 		AnthropicBaseURL: ts.URL,
+		AnthropicVersion: "2023-06-01",
+		MaxTokens:        2048,
 		HTTPClient:       &http.Client{Timeout: 2 * time.Second},
 	}
 	analyzer, _ := NewAnthropicAnalyzer(config)
@@ -201,23 +204,12 @@ func TestAnthropicAnalyzer_ConfigFallbacks(t *testing.T) {
 		TextModel: "claude-3-haiku-20240307",
 	}
 
-	analyzer, err := NewAnthropicAnalyzer(config)
-	if err != nil {
-		t.Fatalf("NewAnthropicAnalyzer failed: %v", err)
-	}
-
-	if analyzer.apiKey != "fallback-auth-token" {
-		t.Errorf("expected apiKey 'fallback-auth-token', got '%s'", analyzer.apiKey)
-	}
-	if analyzer.baseURL != "https://api.anthropic.com/v1" {
-		t.Errorf("expected default baseURL 'https://api.anthropic.com/v1', got '%s'", analyzer.baseURL)
-	}
-	if analyzer.version != "2023-06-01" {
-		t.Errorf("expected default version '2023-06-01', got '%s'", analyzer.version)
-	}
-	if analyzer.textModel != "claude-3-haiku-20240307" {
-		t.Errorf("expected textModel 'claude-3-haiku-20240307', got '%s'", analyzer.textModel)
-	}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("NewAnthropicAnalyzer should have panicked on missing AnthropicBaseURL")
+		}
+	}()
+	_, _ = NewAnthropicAnalyzer(config)
 }
 
 func TestAnthropicAnalyzer_EmptyContent(t *testing.T) {
@@ -231,6 +223,8 @@ func TestAnthropicAnalyzer_EmptyContent(t *testing.T) {
 	config := OpenAIConfig{
 		AnthropicAPIKey:  "key",
 		AnthropicBaseURL: ts.URL,
+		AnthropicVersion: "2023-06-01",
+		MaxTokens:        2048,
 		HTTPClient:       ts.Client(),
 	}
 	analyzer, _ := NewAnthropicAnalyzer(config)
@@ -270,6 +264,8 @@ func TestAnthropicAnalyzer_AnalyzeImage_MultipleImages(t *testing.T) {
 	config := OpenAIConfig{
 		AnthropicAPIKey:  "key",
 		AnthropicBaseURL: ts.URL,
+		AnthropicVersion: "2023-06-01",
+		MaxTokens:        2048,
 		HTTPClient:       ts.Client(),
 	}
 	analyzer, _ := NewAnthropicAnalyzer(config)

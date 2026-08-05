@@ -46,7 +46,7 @@ func main() {
 	// Configure the dual AI models
 	aiTextModel := envutil.MustGetString("OPENAI_TEXT_MODEL")
 	aiVisionModel := envutil.MustGetString("OPENAI_VISION_MODEL")
-	aiEmbeddingModel := envutil.GetEmbeddingModel()
+	aiEmbeddingModel := envutil.MustGetEmbeddingModel()
 	chunkingRoute := envutil.MustGetString("MODEL_ROUTE_CHUNKING")
 	inferenceRoute := envutil.MustGetString("MODEL_ROUTE_INFERENCE")
 	extractionRoute := envutil.MustGetString("MODEL_ROUTE_EXTRACTION")
@@ -133,7 +133,7 @@ func main() {
 	}
 	defer gatewayConn.Close()
 	store := storage.NewGatewayStorage(pb.NewStorageGatewayServiceClient(gatewayConn))
-	maxDocTokens := envutil.GetIntOrDefault("LARGE_DOCUMENT_MAX_TOKENS", 8192)
+	maxDocTokens := envutil.MustGetInt("LARGE_DOCUMENT_MAX_TOKENS")
 	natsServer := server.NewNatsServer(nc, js, analyzer, store, workerPoolSize, queueFilter, maxAckPending, pullMaxMessages, maxDocTokens)
 
 	visionHost := visionBaseURL

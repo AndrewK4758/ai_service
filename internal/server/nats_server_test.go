@@ -147,9 +147,15 @@ func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 	analyzer := &mockAnalyzer{err: fmt.Errorf("429 Too Many Requests")}
 	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1, 8192)
 
+	payload, _ := structpb.NewStruct(map[string]any{
+		"global_state": map[string]any{
+			"functional": map[string]any{},
+		},
+	})
 	req := &pb.ExecuteTaskRequest{
 		Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 		TaskSubject: "worker.ai.default",
+		Payload:     payload,
 	}
 	data, _ := proto.Marshal(req)
 
@@ -167,7 +173,13 @@ func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 }
 
 func TestExtractIsScannedFlag(t *testing.T) {
-	st, _ := structpb.NewStruct(map[string]any{"IsScanned": true})
+	st, _ := structpb.NewStruct(map[string]any{
+		"global_state": map[string]any{
+			"functional": map[string]any{
+				"is_scanned": true,
+			},
+		},
+	})
 	req := &pb.ExecuteTaskRequest{
 		Payload: st,
 	}
@@ -214,7 +226,14 @@ func TestNatsServer_ModelRoutingOverride_ScannedPDF(t *testing.T) {
 	}
 	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1, 8192)
 
-	st, _ := structpb.NewStruct(map[string]any{"IsScanned": true, "DocumentUri": "internal-store://t/a/j/doc.pdf"})
+	st, _ := structpb.NewStruct(map[string]any{
+		"global_state": map[string]any{
+			"functional": map[string]any{
+				"is_scanned":   true,
+				"document_uri": "internal-store://t/a/j/doc.pdf",
+			},
+		},
+	})
 	req := &pb.ExecuteTaskRequest{
 		Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 		TaskSubject: "worker.ai.default",
@@ -260,7 +279,14 @@ func TestNatsServer_ModelRoutingOverride_StructuredTextPDF(t *testing.T) {
 	}
 	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1, 8192)
 
-	st, _ := structpb.NewStruct(map[string]any{"IsScanned": false, "DocumentUri": "internal-store://t/a/j/doc.pdf"})
+	st, _ := structpb.NewStruct(map[string]any{
+		"global_state": map[string]any{
+			"functional": map[string]any{
+				"is_scanned":   false,
+				"document_uri": "internal-store://t/a/j/doc.pdf",
+			},
+		},
+	})
 	req := &pb.ExecuteTaskRequest{
 		Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 		TaskSubject: "worker.ai.default",
@@ -307,7 +333,13 @@ func TestNatsServer_ModelRoutingOverride_HasFlagFalse_Fallback(t *testing.T) {
 	}
 	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1, 8192)
 
-	st, _ := structpb.NewStruct(map[string]any{"DocumentUri": "internal-store://t/a/j/doc.pdf"})
+	st, _ := structpb.NewStruct(map[string]any{
+		"global_state": map[string]any{
+			"functional": map[string]any{
+				"document_uri": "internal-store://t/a/j/doc.pdf",
+			},
+		},
+	})
 	req := &pb.ExecuteTaskRequest{
 		Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 		TaskSubject: "worker.ai.default",
@@ -359,11 +391,14 @@ func TestNatsServer_processMessage_InvalidIdentity_FailFast(t *testing.T) {
 		},
 	}
 
-	server.processMessage(context.Background(), msg)
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Errorf("expected panic for invalid identity")
+		}
+	}()
 
-	if !msg.termCalled {
-		t.Errorf("expected Term to be called for invalid identity")
-	}
+	server.processMessage(context.Background(), msg)
 }
 
 func TestNatsServer_processMessage_MissingTaskSubject_FailFast(t *testing.T) {
@@ -383,9 +418,12 @@ func TestNatsServer_processMessage_MissingTaskSubject_FailFast(t *testing.T) {
 		},
 	}
 
-	server.processMessage(context.Background(), msg)
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Errorf("expected panic for missing task subject")
+		}
+	}()
 
-	if !msg.termCalled {
-		t.Errorf("expected Term to be called for missing task subject")
-	}
+	server.processMessage(context.Background(), msg)
 }

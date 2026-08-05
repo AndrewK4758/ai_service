@@ -188,7 +188,7 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.E
 
 	m := modelID
 	if m == "" {
-		m = o.config.TextModel
+		panic(fmt.Errorf("missing modelID in OpenAI AnalyzeText"))
 	}
 
 	reqBody := openAIRequest{
@@ -232,7 +232,7 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 
 	m := modelID
 	if m == "" {
-		m = o.config.VisionModel
+		panic(fmt.Errorf("missing modelID in OpenAI AnalyzeImage"))
 	}
 
 	reqBody := openAIRequest{
@@ -269,10 +269,7 @@ type openAIEmbeddingResponse struct {
 func (o *OpenAIAnalyzer) GenerateEmbedding(ctx context.Context, text string, modelID string) ([]float32, error) {
 	m := modelID
 	if m == "" {
-		m = o.config.EmbeddingModel
-	}
-	if m == "" {
-		m = envutil.GetEmbeddingModel()
+		panic(fmt.Errorf("missing modelID in OpenAI GenerateEmbedding"))
 	}
 
 	reqBody := openAIEmbeddingRequest{
@@ -375,6 +372,15 @@ func convertExpectedSchema(schemaObj map[string]any) {
 				if typeVal, hasType := propObj["type"]; hasType {
 					if typeStr, isStr := typeVal.(string); isStr {
 						propObj["type"] = []string{typeStr, "null"}
+						if typeStr == "object" {
+							convertExpectedSchema(propObj)
+						} else if typeStr == "array" {
+							if items, ok := propObj["items"].(map[string]any); ok {
+								if itemType, ok := items["type"].(string); ok && itemType == "object" {
+									convertExpectedSchema(items)
+								}
+							}
+						}
 					}
 				}
 			}

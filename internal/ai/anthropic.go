@@ -37,12 +37,12 @@ func NewAnthropicAnalyzer(config OpenAIConfig) (*AnthropicAnalyzer, error) {
 
 	baseURL := config.AnthropicBaseURL
 	if baseURL == "" {
-		baseURL = "https://api.anthropic.com/v1"
+		panic(fmt.Errorf("missing required config: AnthropicBaseURL"))
 	}
 
 	version := config.AnthropicVersion
 	if version == "" {
-		version = "2023-06-01"
+		panic(fmt.Errorf("missing required config: AnthropicVersion"))
 	}
 
 	textModel := config.AnthropicTextModel
@@ -197,10 +197,13 @@ func (a *AnthropicAnalyzer) AnalyzeText(ctx context.Context, text string, req *p
 	if m == "" {
 		m = a.textModel
 	}
+	if m == "" {
+		panic(fmt.Errorf("missing modelID in Anthropic AnalyzeText"))
+	}
 
 	maxTok := a.maxTokens
 	if maxTok <= 0 {
-		maxTok = 4096
+		panic(fmt.Errorf("missing maxTokens in Anthropic configuration"))
 	}
 
 	reqBody := anthropicRequest{
@@ -249,10 +252,13 @@ func (a *AnthropicAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byt
 	if m == "" {
 		m = a.visionModel
 	}
+	if m == "" {
+		panic(fmt.Errorf("missing modelID in Anthropic AnalyzeImage"))
+	}
 
 	maxTok := a.maxTokens
 	if maxTok <= 0 {
-		maxTok = 4096
+		panic(fmt.Errorf("missing maxTokens in Anthropic configuration"))
 	}
 
 	reqBody := anthropicRequest{

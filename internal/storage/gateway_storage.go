@@ -21,8 +21,8 @@ type GatewayStorage struct {
 func NewGatewayStorage(client pb.StorageGatewayServiceClient) *GatewayStorage {
 	return &GatewayStorage{
 		client:       client,
-		retryCount:   envutil.GetIntOrDefault("STORAGE_FETCH_RETRY_COUNT", 3),
-		retrySleepMs: envutil.GetIntOrDefault("STORAGE_FETCH_RETRY_SLEEP_MS", 500),
+		retryCount:   envutil.MustGetInt("STORAGE_FETCH_RETRY_COUNT"),
+		retrySleepMs: envutil.MustGetInt("STORAGE_FETCH_RETRY_SLEEP_MS"),
 	}
 }
 
@@ -49,12 +49,12 @@ func (g *GatewayStorage) FetchFile(ctx context.Context, relativePath string, ide
 
 	retryCount := g.retryCount
 	if retryCount < 0 {
-		retryCount = envutil.GetIntOrDefault("STORAGE_FETCH_RETRY_COUNT", 3)
+		retryCount = envutil.MustGetInt("STORAGE_FETCH_RETRY_COUNT")
 	}
 
 	retrySleepMs := g.retrySleepMs
 	if retrySleepMs <= 0 {
-		retrySleepMs = envutil.GetIntOrDefault("STORAGE_FETCH_RETRY_SLEEP_MS", 500)
+		retrySleepMs = envutil.MustGetInt("STORAGE_FETCH_RETRY_SLEEP_MS")
 	}
 
 	reqCtx := forwardMetadata(ctx)

@@ -1,0 +1,136 @@
+?   	ai_service/cmd/server	[no test files]
+testing: warning: no tests to run
+PASS
+ok  	ai_service/internal/ai	0.006s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	ai_service/internal/parser	0.001s [no tests to run]
+=== RUN   TestEmpirical_FailFastScenarios
+=== RUN   TestEmpirical_FailFastScenarios/Scenario_1:_Malformed_proto_payload_in_processMessage_->_must_panic
+    challenger_m4_empirical_test.go:31: 
+        	Error Trace:	/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:31
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/panic.go:860
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/nats_server.go:194
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:67
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:33
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:66
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/asm_amd64.s:1771
+        	Error:      	"action failed: unmarshal error: proto: cannot parse invalid wire-format data" does not contain "action failed for job AIServiceConsume: failed to unmarshal request payload"
+        	Test:       	TestEmpirical_FailFastScenarios/Scenario_1:_Malformed_proto_payload_in_processMessage_->_must_panic
+=== RUN   TestEmpirical_FailFastScenarios/Scenario_2:_Missing_identity_in_processMessage_->_must_panic
+    challenger_m4_empirical_test.go:31: 
+        	Error Trace:	/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:31
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/panic.go:860
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/nats_server.go:207
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:81
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:33
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:80
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/asm_amd64.s:1771
+        	Error:      	"action failed: invalid identity - InfrastructureIdentity is nil" does not contain "missing required property identity"
+        	Test:       	TestEmpirical_FailFastScenarios/Scenario_2:_Missing_identity_in_processMessage_->_must_panic
+=== RUN   TestEmpirical_FailFastScenarios/Scenario_3:_Missing_task_subject_in_processMessage_->_must_panic
+    challenger_m4_empirical_test.go:52: 
+        	Error Trace:	/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:52
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/panic.go:860
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/nats_server.go:216
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:99
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:54
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:98
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/asm_amd64.s:1771
+        	Error:      	Not equal: 
+        	            	expected: "action failed for job AIServiceConsume: missing required property task_subject"
+        	            	actual  : "action failed: missing required TaskSubject"
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1 +1 @@
+        	            	-action failed for job AIServiceConsume: missing required property task_subject
+        	            	+action failed: missing required TaskSubject
+        	Test:       	TestEmpirical_FailFastScenarios/Scenario_3:_Missing_task_subject_in_processMessage_->_must_panic
+=== RUN   TestEmpirical_FailFastScenarios/Scenario_4:_Missing_dynamic_input_in_processMessage_->_must_panic
+    challenger_m4_empirical_test.go:31: 
+        	Error Trace:	/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:31
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/panic.go:860
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/nats_server.go:803
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/nats_server.go:221
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:118
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:33
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:117
+        	Error:      	"action failed: missing payload" does not contain "action failed for job AIServiceConsume:"
+        	Test:       	TestEmpirical_FailFastScenarios/Scenario_4:_Missing_dynamic_input_in_processMessage_->_must_panic
+=== RUN   TestEmpirical_FailFastScenarios/Scenario_5:_Malformed_scanned_flag_in_extractIsScannedFlag_->_must_panic
+    challenger_m4_empirical_test.go:52: 
+        	Error Trace:	/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:52
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/panic.go:860
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/nats_server.go:856
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:140
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:54
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:139
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/asm_amd64.s:1771
+        	Error:      	Not equal: 
+        	            	expected: "action failed for job j1: missing required property is_scanned in global_state.functional"
+        	            	actual  : "action failed: invalid is_scanned flag value"
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1 +1 @@
+        	            	-action failed for job j1: missing required property is_scanned in global_state.functional
+        	            	+action failed: invalid is_scanned flag value
+        	Test:       	TestEmpirical_FailFastScenarios/Scenario_5:_Malformed_scanned_flag_in_extractIsScannedFlag_->_must_panic
+=== RUN   TestEmpirical_FailFastScenarios/Scenario_6:_Invalid_empty_subject_in_resolveModelID_->_must_panic
+    challenger_m4_empirical_test.go:52: 
+        	Error Trace:	/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:52
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/panic.go:860
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/nats_server.go:773
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:146
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:54
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:145
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/asm_amd64.s:1771
+        	Error:      	Not equal: 
+        	            	expected: "action failed for job AIServiceConsume: missing or invalid subject for model resolution"
+        	            	actual  : "action failed: missing TaskSubject for resolveModelID"
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1 +1 @@
+        	            	-action failed for job AIServiceConsume: missing or invalid subject for model resolution
+        	            	+action failed: missing TaskSubject for resolveModelID
+        	Test:       	TestEmpirical_FailFastScenarios/Scenario_6:_Invalid_empty_subject_in_resolveModelID_->_must_panic
+    challenger_m4_empirical_test.go:52: 
+        	Error Trace:	/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:52
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/panic.go:860
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/nats_server.go:773
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:150
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:54
+        	            				/home/ak/projects/doc_processor_service/ai_service/internal/server/challenger_m4_empirical_test.go:149
+        	            				/home/ak/.asdf/installs/golang/1.26.5/go/src/runtime/asm_amd64.s:1771
+        	Error:      	Not equal: 
+        	            	expected: "action failed for job AIServiceConsume: missing or invalid subject for model resolution"
+        	            	actual  : "action failed: missing TaskSubject for resolveModelID"
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1 +1 @@
+        	            	-action failed for job AIServiceConsume: missing or invalid subject for model resolution
+        	            	+action failed: missing TaskSubject for resolveModelID
+        	Test:       	TestEmpirical_FailFastScenarios/Scenario_6:_Invalid_empty_subject_in_resolveModelID_->_must_panic
+=== RUN   TestEmpirical_FailFastScenarios/Scenario_7:_Missing_DocumentUri_in_getDocumentUri_->_must_panic
+--- FAIL: TestEmpirical_FailFastScenarios (0.00s)
+    --- FAIL: TestEmpirical_FailFastScenarios/Scenario_1:_Malformed_proto_payload_in_processMessage_->_must_panic (0.00s)
+    --- FAIL: TestEmpirical_FailFastScenarios/Scenario_2:_Missing_identity_in_processMessage_->_must_panic (0.00s)
+    --- FAIL: TestEmpirical_FailFastScenarios/Scenario_3:_Missing_task_subject_in_processMessage_->_must_panic (0.00s)
+    --- FAIL: TestEmpirical_FailFastScenarios/Scenario_4:_Missing_dynamic_input_in_processMessage_->_must_panic (0.00s)
+    --- FAIL: TestEmpirical_FailFastScenarios/Scenario_5:_Malformed_scanned_flag_in_extractIsScannedFlag_->_must_panic (0.00s)
+    --- FAIL: TestEmpirical_FailFastScenarios/Scenario_6:_Invalid_empty_subject_in_resolveModelID_->_must_panic (0.00s)
+    --- PASS: TestEmpirical_FailFastScenarios/Scenario_7:_Missing_DocumentUri_in_getDocumentUri_->_must_panic (0.00s)
+FAIL
+FAIL	ai_service/internal/server	0.007s
+testing: warning: no tests to run
+PASS
+ok  	ai_service/internal/storage	0.002s [no tests to run]
+?   	ai_service/scripts/test_client	[no test files]
+FAIL

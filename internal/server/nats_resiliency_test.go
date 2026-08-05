@@ -90,7 +90,13 @@ func TestResiliency_NatsServer_JITMemoryDiscarding(t *testing.T) {
 	hdr := make(nats.Header)
 	hdr.Set("Reply-Subject", "test.reply.jit")
 
-	st, _ := structpb.NewStruct(map[string]any{"DocumentUri": "internal-store://t/a/j/mem.txt"})
+	st, _ := structpb.NewStruct(map[string]any{
+		"global_state": map[string]any{
+			"functional": map[string]any{
+				"document_uri": "internal-store://t/a/j/mem.txt",
+			},
+		},
+	})
 	req := &pb.ExecuteTaskRequest{
 		Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 		TaskSubject: "worker.ai.default",
@@ -137,7 +143,13 @@ func TestResiliency_NatsServer_HighConcurrencyStress(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func(id int) {
 			defer wg.Done()
-			st, _ := structpb.NewStruct(map[string]any{"DocumentUri": fmt.Sprintf("internal-store://t/a/j/doc_%d.txt", id)})
+			st, _ := structpb.NewStruct(map[string]any{
+				"global_state": map[string]any{
+					"functional": map[string]any{
+						"document_uri": fmt.Sprintf("internal-store://t/a/j/doc_%d.txt", id),
+					},
+				},
+			})
 			req := &pb.ExecuteTaskRequest{
 				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 				TaskSubject: "worker.ai.default",
@@ -198,7 +210,13 @@ func TestResiliency_ErrorFormatVerification(t *testing.T) {
 			hdr := make(nats.Header)
 			hdr.Set("Reply-Subject", "test.reply.err")
 
-			st, _ := structpb.NewStruct(map[string]any{"DocumentUri": tt.docUri})
+			st, _ := structpb.NewStruct(map[string]any{
+				"global_state": map[string]any{
+					"functional": map[string]any{
+						"document_uri": tt.docUri,
+					},
+				},
+			})
 			req := &pb.ExecuteTaskRequest{
 				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 				TaskSubject: "worker.ai.default",

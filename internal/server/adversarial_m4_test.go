@@ -43,22 +43,34 @@ func TestAdversarial_AIService_ModelResolutionAndVisionRoutingEdgeCases(t *testi
 		tests := []struct {
 			subject  string
 			expected string
+			panics   bool
 		}{
-			{"", "default-model-v1"},
-			{"   ", "default-model-v1"},
-			{"...", "default-model-v1"},
-			{"worker.ai.inference", "inference-model-v2"},
-			{"worker.ai.ocr", "ocr-model-v3"},
-			{"worker.ai.embed", "text-embedding-3-small"},
-			{"worker.ai.embedding", "text-embedding-3-small"},
-			{"worker.ai.custom-step", "custom-model-v4"},
-			{"worker.ai.fallback", "fallback-model-v5"},
+			{"", "", true},
+			{"   ", "", true},
+			{"...", "", true},
+			{"worker.ai.inference", "inference-model-v2", false},
+			{"worker.ai.ocr", "ocr-model-v3", false},
+			{"worker.ai.embed", "text-embedding-3-small", false},
+			{"worker.ai.embedding", "text-embedding-3-small", false},
+			{"worker.ai.custom-step", "custom-model-v4", false},
+			{"worker.ai.fallback", "fallback-model-v5", false},
 		}
 
 		for _, tt := range tests {
-			got := server.resolveModelID(tt.subject)
-			if got != tt.expected {
-				t.Errorf("resolveModelID(%q) = %q; want %q", tt.subject, got, tt.expected)
+			if tt.panics {
+				func() {
+					defer func() {
+						if r := recover(); r == nil {
+							t.Errorf("resolveModelID(%q) expected to panic but didn't", tt.subject)
+						}
+					}()
+					server.resolveModelID(tt.subject)
+				}()
+			} else {
+				got := server.resolveModelID(tt.subject)
+				if got != tt.expected {
+					t.Errorf("resolveModelID(%q) = %q; want %q", tt.subject, got, tt.expected)
+				}
 			}
 		}
 	})
@@ -108,7 +120,11 @@ func TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths(t *testin
 		hdr.Set("Reply-Subject", "test.reply.adv")
 
 		payload, _ := structpb.NewStruct(map[string]any{
-			"DocumentUri": "internal-store://t_adv/a_adv/j_adv/doc.txt",
+			"global_state": map[string]any{
+				"functional": map[string]any{
+					"document_uri": "internal-store://t_adv/a_adv/j_adv/doc.txt",
+				},
+			},
 		})
 		req := &pb.ExecuteTaskRequest{
 			Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
@@ -177,9 +193,17 @@ func TestAdversarial_AIService_JITByteDiscardAndMemoryAudit(t *testing.T) {
 
 	// Run 20 sequential JIT fetches of 5MB files
 	for i := 0; i < 20; i++ {
+		payload, _ := structpb.NewStruct(map[string]any{
+			"global_state": map[string]any{
+				"functional": map[string]any{
+					"document_uri": "internal-store://mem_test/doc.txt",
+				},
+			},
+		})
 		req := &pb.ExecuteTaskRequest{
 			Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 			TaskSubject: "worker.ai.default",
+			Payload:     payload,
 		}
 		data, _ := proto.Marshal(req)
 		hdr := make(nats.Header)
@@ -226,9 +250,17 @@ func TestAdversarial_AIService_HighConcurrencyStress(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 
+			payload, _ := structpb.NewStruct(map[string]any{
+				"global_state": map[string]any{
+					"functional": map[string]any{
+						"document_uri": "internal-store://mem_test/doc.txt",
+					},
+				},
+			})
 			req := &pb.ExecuteTaskRequest{
 				Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 				TaskSubject: "worker.ai.default",
+				Payload:     payload,
 			}
 
 			data, _ := proto.Marshal(req)

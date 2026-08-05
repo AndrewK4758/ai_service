@@ -22,6 +22,7 @@ import (
 	docparser "ai_service/internal/parser"
 	"ai_service/internal/storage"
 
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 	"github.com/AndrewK4758/shared_utils/identityparser"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
@@ -190,8 +191,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	req := &pb.ExecuteTaskRequest{}
 	if err := proto.Unmarshal(msg.Data(), req); err != nil {
-		s.handleUnmarshalError(ctx, msg, replySubj, err, durableName, t, a, j, attempt, startTime)
-		return
+		panic(fmt.Errorf("action failed: unmarshal error: %v", err))
 	}
 
 	if reqJson, err := protojson.Marshal(req); err == nil {
@@ -204,25 +204,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	// Fail-Fast Assertion 1: Infrastructure Identity Validation
 	if err := identityparser.NewIdentityParser(req.GetIdentity()).Validate(true); err != nil {
-		logger.Error("AI_Service", "FAIL-FAST ASSERTION FAILED: invalid identity - %v", err)
-		if replySubj != "" {
-			_ = s.sendErrorReply(ctx, replySubj, err.Error(), "INVALID_IDENTITY")
-		}
-		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-			Component:  "AI_Service",
-			Event:      "TERMINATED",
-			Stream:     "WORKERS",
-			Subject:    msg.Subject(),
-			Consumer:   durableName,
-			TenantID:   t,
-			AppID:      a,
-			JobID:      j,
-			Attempt:    attempt,
-			DurationMs: time.Since(startTime).Milliseconds(),
-			Error:      err,
-		})
-		_ = msg.Term()
-		return
+		panic(fmt.Errorf("action failed: invalid identity - %v", err))
 	}
 
 	t = req.GetIdentity().GetTenantId()
@@ -231,26 +213,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	// Fail-Fast Assertion 2: Required TaskSubject Validation
 	if req.GetTaskSubject() == "" {
-		err := fmt.Errorf("missing required TaskSubject")
-		logger.Error("AI_Service", "FAIL-FAST ASSERTION FAILED: %v", err)
-		if replySubj != "" {
-			_ = s.sendErrorReply(ctx, replySubj, err.Error(), "MISSING_TASK_SUBJECT")
-		}
-		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-			Component:  "AI_Service",
-			Event:      "TERMINATED",
-			Stream:     "WORKERS",
-			Subject:    msg.Subject(),
-			Consumer:   durableName,
-			TenantID:   t,
-			AppID:      a,
-			JobID:      j,
-			Attempt:    attempt,
-			DurationMs: time.Since(startTime).Milliseconds(),
-			Error:      err,
-		})
-		_ = msg.Term()
-		return
+		panic(fmt.Errorf("action failed: missing required TaskSubject"))
 	}
 
 	targetSubj := req.GetTaskSubject()
@@ -807,7 +770,7 @@ var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 func (s *NatsServer) resolveModelID(subject string) string {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		return envutil.MustGetString("MODEL_ROUTE_DEFAULT")
+		panic(fmt.Errorf("action failed: missing TaskSubject for resolveModelID"))
 	}
 
 	parts := strings.Split(subject, ".")
@@ -821,14 +784,14 @@ func (s *NatsServer) resolveModelID(subject string) string {
 	}
 
 	if trailingToken == "" {
-		return envutil.MustGetString("MODEL_ROUTE_DEFAULT")
+		panic(fmt.Errorf("action failed: missing TaskSubject trailing token for resolveModelID"))
 	}
 
 	sanitized := nonAlphanumericRegex.ReplaceAllString(trailingToken, "_")
 	upperToken := strings.ToUpper(sanitized)
 
 	if upperToken == "EMBEDDING" || upperToken == "EMBED" {
-		return envutil.GetEmbeddingModel()
+		return envutil.MustGetEmbeddingModel()
 	}
 
 	envKey := fmt.Sprintf("MODEL_ROUTE_%s", upperToken)
@@ -837,12 +800,42 @@ func (s *NatsServer) resolveModelID(subject string) string {
 
 func extractIsScannedFlag(req *pb.ExecuteTaskRequest) (bool, bool) {
 	if req == nil || req.Payload == nil {
-		return false, false
+		panic(fmt.Errorf("action failed: missing payload"))
 	}
-	payloadMap := req.Payload.AsMap()
-	keys := []string{"IsScanned", "is_scanned"}
+	parser := workflowparser.NewTaskRequestParser(req)
+	funcState, err := parser.GetFunctionalState()
+	if err != nil {
+		panic(fmt.Errorf("action failed: %v", err))
+	}
+	// 1. Check node_config first
+	if req.Payload != nil {
+		payloadMap := req.Payload.AsMap()
+		if nodeConfigRaw, ok := payloadMap["node_config"]; ok {
+			if nodeConfig, ok := nodeConfigRaw.(map[string]any); ok {
+				keys := []string{"is_scanned", "IsScanned"}
+				for _, k := range keys {
+					if v, ok := nodeConfig[k]; ok {
+						if b, ok := v.(bool); ok {
+							return b, true
+						}
+						if s, ok := v.(string); ok {
+							s = strings.TrimSpace(strings.ToLower(s))
+							if s == "yes" || s == "true" || s == "1" {
+								return true, true
+							} else if s == "no" || s == "false" || s == "0" {
+								return false, true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Check global_state.functional
+	keys := []string{"is_scanned", "IsScanned"}
 	for _, k := range keys {
-		v, ok := payloadMap[k]
+		v, ok := funcState[k]
 		if !ok {
 			continue
 		}
@@ -860,19 +853,26 @@ func extractIsScannedFlag(req *pb.ExecuteTaskRequest) (bool, bool) {
 			if parsed, err := strconv.ParseBool(s); err == nil {
 				return parsed, true
 			}
+			panic(fmt.Errorf("action failed: invalid is_scanned flag value"))
 		}
+		panic(fmt.Errorf("action failed: invalid is_scanned flag type"))
 	}
 	return false, false
 }
 
 func getDocumentUri(req *pb.ExecuteTaskRequest) string {
 	if req == nil || req.Payload == nil {
-		return ""
+		panic(fmt.Errorf("action failed: missing payload"))
 	}
-	payloadMap := req.Payload.AsMap()
-	keys := []string{"DocumentUri", "document_uri"}
+	parser := workflowparser.NewTaskRequestParser(req)
+	funcState, err := parser.GetFunctionalState()
+	if err != nil {
+		panic(fmt.Errorf("action failed: %v", err))
+	}
+	
+	keys := []string{"document_uri", "DocumentUri"}
 	for _, k := range keys {
-		if v, ok := payloadMap[k].(string); ok {
+		if v, ok := funcState[k].(string); ok {
 			return v
 		}
 	}
