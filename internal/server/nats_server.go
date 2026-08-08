@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -22,11 +23,11 @@ import (
 	docparser "ai_service/internal/parser"
 	"ai_service/internal/storage"
 
-	"github.com/AndrewK4758/shared_utils/workflowparser"
 	"github.com/AndrewK4758/shared_utils/identityparser"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
 	"github.com/AndrewK4758/shared_utils/natsutil"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 
 	pb "github.com/AndrewK4758/shared_protos"
 )
@@ -41,9 +42,15 @@ type NatsServer struct {
 	maxAckPending     int
 	pullMaxMessages   int
 	maxDocumentTokens int
+	keepAliveManager  *KeepAliveManager
 }
 
 func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, store storage.Manager, workerPoolSize int, queueFilter string, maxAckPending int, pullMaxMessages int, maxDocumentTokens int) *NatsServer {
+	ackWaitStr := envutil.MustGetString("WORKER_ACK_WAIT")
+	ackWait, err := time.ParseDuration(ackWaitStr)
+	if err != nil {
+		ackWait = 1 * time.Minute
+	}
 	return &NatsServer{
 		nc:                nc,
 		js:                js,
@@ -54,11 +61,15 @@ func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, 
 		maxAckPending:     maxAckPending,
 		pullMaxMessages:   pullMaxMessages,
 		maxDocumentTokens: maxDocumentTokens,
+		keepAliveManager:  NewKeepAliveManager(ackWait / 2),
 	}
 }
 
 func (s *NatsServer) Start(ctx context.Context) error {
-	streamName := "WORKERS"
+	streamName := envutil.MustGetString("NATS_WORKER_STREAM")
+	if streamName == "" {
+		panic(fmt.Errorf("NATS_WORKER_STREAM is missing"))
+	}
 
 	durableName := fmt.Sprintf("ai_service_workers_%s", s.queueFilter)
 	filterSubject := fmt.Sprintf("worker.ai.%s", s.queueFilter)
@@ -146,6 +157,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	}
 
 	t, a, j := natsutil.ExtractIdentityFromAiSubject(msg.Subject())
+	identity := &pb.InfrastructureIdentity{TenantId: t, AppId: a, JobId: j}
 
 	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
 		Component: "AI_Service",
@@ -161,37 +173,25 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	})
 
 	if err == nil && meta.NumDelivered > 5 {
-		s.handleExceededRetries(ctx, msg, durableName, t, a, j, attempt, startTime)
+		s.handleExceededRetries(ctx, msg, durableName, identity, attempt, startTime)
 		return
 	}
 
 	if ctx.Err() != nil {
-		s.handleContextCanceled(msg, durableName, t, a, j, attempt, startTime)
+		s.handleContextCanceled(msg, durableName, identity, attempt, startTime)
 		return
 	}
 
-	// --- START of InProgress keep-alive loop ---
-	ackWaitStr := envutil.MustGetString("WORKER_ACK_WAIT")
-	ackWait, err := time.ParseDuration(ackWaitStr)
-	if err != nil {
-		ackWait = 1 * time.Minute
-	}
-	keepAliveInterval := ackWait / 2
-
-	ticker := time.NewTicker(keepAliveInterval)
-	defer ticker.Stop()
-	done := make(chan struct{})
-	defer close(done)
-
-	go s.runKeepAlive(ctx, msg, ticker, done, durableName, t, a, j, attempt)
-	// --- END of InProgress keep-alive loop ---
+	msgId := fmt.Sprintf("%p", msg)
+	s.keepAliveManager.Add(msgId, msg)
+	defer s.keepAliveManager.Remove(msgId)
 
 	logger.Info("AI_Service", "Received action request on subject: %s", msg.Subject())
 	replySubj := getReplySubject(msg)
 
 	req := &pb.ExecuteTaskRequest{}
 	if err := proto.Unmarshal(msg.Data(), req); err != nil {
-		panic(fmt.Errorf("action failed: unmarshal error: %v", err))
+		panic(fmt.Errorf("failed to unmarshal ExecuteTaskRequest: %w", err))
 	}
 
 	if reqJson, err := protojson.Marshal(req); err == nil {
@@ -204,21 +204,22 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	// Fail-Fast Assertion 1: Infrastructure Identity Validation
 	if err := identityparser.NewIdentityParser(req.GetIdentity()).Validate(true); err != nil {
-		panic(fmt.Errorf("action failed: invalid identity - %v", err))
+		panic(fmt.Sprintf("action failed: invalid identity - %v", err))
 	}
 
-	t = req.GetIdentity().GetTenantId()
-	a = req.GetIdentity().GetAppId()
-	j = req.GetIdentity().GetJobId()
+	identity = req.GetIdentity()
 
 	// Fail-Fast Assertion 2: Required TaskSubject Validation
 	if req.GetTaskSubject() == "" {
-		panic(fmt.Errorf("action failed: missing required TaskSubject"))
+		panic("action failed: missing required TaskSubject")
 	}
 
 	targetSubj := req.GetTaskSubject()
 
-	isScanned, hasFlag := extractIsScannedFlag(req)
+	isScanned, hasFlag, err := extractIsScannedFlag(req)
+	if err != nil {
+		panic(fmt.Errorf("failed to extract is_scanned flag: %w", err))
+	}
 	var modelID string
 	if hasFlag {
 		if isScanned {
@@ -227,19 +228,22 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 			modelID = envutil.MustGetString("OPENAI_TEXT_MODEL")
 		}
 	} else {
-		modelID = s.resolveModelID(targetSubj)
+		modelID, err = s.resolveModelID(targetSubj)
+		if err != nil {
+			panic(fmt.Errorf("failed to resolve model ID: %w", err))
+		}
 	}
 
 	result, errCode, err := s.executeAction(ctx, req, targetSubj, modelID)
 	if err != nil {
-		s.handleExecutionError(ctx, msg, replySubj, req, errCode, err, durableName, t, a, j, attempt, startTime)
+		s.handleExecutionError(ctx, msg, replySubj, req, errCode, err, durableName, identity, attempt, startTime)
 		return
 	}
 
-	s.handleExecutionSuccess(ctx, msg, replySubj, req, result, durableName, t, a, j, attempt, startTime)
+	s.handleExecutionSuccess(ctx, msg, replySubj, req, result, durableName, identity, attempt, startTime)
 }
 
-func (s *NatsServer) handleExceededRetries(ctx context.Context, msg jetstream.Msg, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) handleExceededRetries(ctx context.Context, msg jetstream.Msg, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
 	logger.Info("AI_Service", "Message exceeded max delivery attempts, terminating")
 	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
 		Component:  "AI_Service",
@@ -247,9 +251,9 @@ func (s *NatsServer) handleExceededRetries(ctx context.Context, msg jetstream.Ms
 		Stream:     "WORKERS",
 		Subject:    msg.Subject(),
 		Consumer:   durableName,
-		TenantID:   t,
-		AppID:      a,
-		JobID:      j,
+		TenantID:   identity.GetTenantId(),
+		AppID:      identity.GetAppId(),
+		JobID:      identity.GetJobId(),
 		Attempt:    attempt,
 		DurationMs: time.Since(startTime).Milliseconds(),
 		Error:      fmt.Errorf("exceeded max delivery attempts (5)"),
@@ -262,7 +266,7 @@ func (s *NatsServer) handleExceededRetries(ctx context.Context, msg jetstream.Ms
 	_ = msg.Term()
 }
 
-func (s *NatsServer) handleContextCanceled(msg jetstream.Msg, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) handleContextCanceled(msg jetstream.Msg, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
 	logger.Info("AI_Service", "Context canceled, NAKing message")
 	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
 		Component:  "AI_Service",
@@ -270,46 +274,16 @@ func (s *NatsServer) handleContextCanceled(msg jetstream.Msg, durableName, t, a,
 		Stream:     "WORKERS",
 		Subject:    msg.Subject(),
 		Consumer:   durableName,
-		TenantID:   t,
-		AppID:      a,
-		JobID:      j,
+		TenantID:   identity.GetTenantId(),
+		AppID:      identity.GetAppId(),
+		JobID:      identity.GetJobId(),
 		Attempt:    attempt,
 		DurationMs: time.Since(startTime).Milliseconds(),
 	})
 	_ = msg.Nak()
 }
 
-func (s *NatsServer) runKeepAlive(ctx context.Context, msg jetstream.Msg, ticker *time.Ticker, done chan struct{}, durableName, t, a, j string, attempt uint64) {
-	for {
-		select {
-		case <-ticker.C:
-			s.sendKeepAlive(msg, durableName, t, a, j, attempt)
-		case <-done:
-			return
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (s *NatsServer) sendKeepAlive(msg jetstream.Msg, durableName, t, a, j string, attempt uint64) {
-	if err := msg.InProgress(); err != nil {
-		return
-	}
-	natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-		Component: "AI_Service",
-		Event:     "IN_PROGRESS",
-		Stream:    "WORKERS",
-		Subject:   msg.Subject(),
-		Consumer:  durableName,
-		TenantID:  t,
-		AppID:     a,
-		JobID:     j,
-		Attempt:   attempt,
-	})
-}
-
-func (s *NatsServer) handleUnmarshalError(ctx context.Context, msg jetstream.Msg, replySubj string, err error, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) handleUnmarshalError(ctx context.Context, msg jetstream.Msg, replySubj string, err error, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
 	logger.Info("AI_Service", "Error unmarshaling request: %v", err)
 	errMsg := fmt.Sprintf("[Step: WORKER_DEQUEUE, URI: unknown] invalid payload: %v", err)
 	errReply := s.sendErrorReply(ctx, replySubj, errMsg, "INVALID_PAYLOAD")
@@ -322,9 +296,9 @@ func (s *NatsServer) handleUnmarshalError(ctx context.Context, msg jetstream.Msg
 		Stream:     "WORKERS",
 		Subject:    msg.Subject(),
 		Consumer:   durableName,
-		TenantID:   t,
-		AppID:      a,
-		JobID:      j,
+		TenantID:   identity.GetTenantId(),
+		AppID:      identity.GetAppId(),
+		JobID:      identity.GetJobId(),
 		Attempt:    attempt,
 		DurationMs: time.Since(startTime).Milliseconds(),
 		Error:      err,
@@ -333,7 +307,10 @@ func (s *NatsServer) handleUnmarshalError(ctx context.Context, msg jetstream.Msg
 }
 
 func (s *NatsServer) executeAction(ctx context.Context, req *pb.ExecuteTaskRequest, targetSubj string, modelID string) (string, string, error) {
-	docUri := getDocumentUri(req)
+	docUri, err := getDocumentUri(req)
+	if err != nil {
+		return "", "INVALID_PAYLOAD", err
+	}
 	if docUri != "" {
 		return s.processDocumentJIT(ctx, docUri, req, modelID, targetSubj)
 	}
@@ -351,9 +328,14 @@ func (s *NatsServer) processDocumentJIT(ctx context.Context, docUri string, req 
 		return "", "STORAGE_FETCH_FAILED", fmt.Errorf("[Step: %s, URI: %s] storage manager is not configured", step, docUri)
 	}
 
-	fileBytes, err := s.store.FetchFile(ctx, docUri, req.Identity)
+	fileReader, err := s.store.FetchFile(ctx, docUri, req.Identity)
 	if err != nil {
 		return "", "STORAGE_FETCH_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to fetch document from storage: %w", step, docUri, err)
+	}
+
+	fileBytes, err := io.ReadAll(fileReader)
+	if err != nil {
+		return "", "STORAGE_FETCH_FAILED", fmt.Errorf("[Step: %s, URI: %s] failed to read document stream: %w", step, docUri, err)
 	}
 
 	return s.dispatchBytesToAnalyzer(ctx, fileBytes, docUri, req, modelID, targetSubj)
@@ -407,7 +389,7 @@ func (s *NatsServer) dispatchBytesToAnalyzer(ctx context.Context, fileBytes []by
 	step := getStepName(req)
 	ext := strings.ToLower(filepath.Ext(docUri))
 
-	isScanned, hasFlag := extractIsScannedFlag(req)
+	isScanned, hasFlag, _ := extractIsScannedFlag(req)
 	if hasFlag && ext == ".pdf" {
 		if isScanned {
 			return s.processPdfVisionBytes(ctx, fileBytes, step, docUri, req, modelID)
@@ -499,9 +481,9 @@ func isVisionRequest(targetSubj string, modelID string, ext string) bool {
 	return false
 }
 
-func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, errCode string, err error, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, errCode string, err error, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
 	if ctx.Err() != nil {
-		s.handleContextCanceled(msg, durableName, t, a, j, attempt, startTime)
+		s.handleContextCanceled(msg, durableName, identity, attempt, startTime)
 		return
 	}
 	logger.Info("AI_Service", "AI processing failed: %v", err)
@@ -510,13 +492,13 @@ func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg
 	if errCode != "LARGE_DOCUMENT_EXCEEDED" {
 		isRateLimit := strings.Contains(errStr, "429") || strings.Contains(errStr, "too many requests") || strings.Contains(errStr, "throttlingexception") || strings.Contains(errStr, "quota")
 		if isRateLimit {
-			s.handleRateLimitError(msg, err, durableName, t, a, j, attempt, startTime)
+			s.handleRateLimitError(msg, err, durableName, identity, attempt, startTime)
 			return
 		}
 
 		isTempError := strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "504") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "eof")
 		if isTempError {
-			s.handleTempError(msg, err, durableName, t, a, j, attempt, startTime)
+			s.handleTempError(msg, err, durableName, identity, attempt, startTime)
 			return
 		}
 	}
@@ -534,9 +516,9 @@ func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg
 		Stream:     "WORKERS",
 		Subject:    msg.Subject(),
 		Consumer:   durableName,
-		TenantID:   t,
-		AppID:      a,
-		JobID:      j,
+		TenantID:   identity.GetTenantId(),
+		AppID:      identity.GetAppId(),
+		JobID:      identity.GetJobId(),
 		Attempt:    attempt,
 		DurationMs: time.Since(startTime).Milliseconds(),
 		Error:      err,
@@ -544,7 +526,7 @@ func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg
 	_ = msg.Term()
 }
 
-func (s *NatsServer) handleRateLimitError(msg jetstream.Msg, err error, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) handleRateLimitError(msg jetstream.Msg, err error, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
 	natsRateLimitDelayStr := envutil.MustGetString("NATS_RATE_LIMIT_DELAY")
 	natsRateLimitDelay, errParse := strconv.Atoi(natsRateLimitDelayStr)
 	if errParse != nil || natsRateLimitDelay <= 0 {
@@ -558,9 +540,9 @@ func (s *NatsServer) handleRateLimitError(msg jetstream.Msg, err error, durableN
 		Stream:     "WORKERS",
 		Subject:    msg.Subject(),
 		Consumer:   durableName,
-		TenantID:   t,
-		AppID:      a,
-		JobID:      j,
+		TenantID:   identity.GetTenantId(),
+		AppID:      identity.GetAppId(),
+		JobID:      identity.GetJobId(),
 		Attempt:    attempt,
 		DurationMs: time.Since(startTime).Milliseconds(),
 		Error:      err,
@@ -568,7 +550,7 @@ func (s *NatsServer) handleRateLimitError(msg jetstream.Msg, err error, durableN
 	_ = msg.NakWithDelay(backoffDelay)
 }
 
-func (s *NatsServer) handleTempError(msg jetstream.Msg, err error, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) handleTempError(msg jetstream.Msg, err error, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
 	natsErrorTimeoutStr := envutil.MustGetString("NATS_NACK_ERROR_TIMEOUT")
 	natsErrorTimeout, errParse := strconv.Atoi(natsErrorTimeoutStr)
 	if errParse != nil || natsErrorTimeout <= 0 {
@@ -581,9 +563,9 @@ func (s *NatsServer) handleTempError(msg jetstream.Msg, err error, durableName, 
 		Stream:     "WORKERS",
 		Subject:    msg.Subject(),
 		Consumer:   durableName,
-		TenantID:   t,
-		AppID:      a,
-		JobID:      j,
+		TenantID:   identity.GetTenantId(),
+		AppID:      identity.GetAppId(),
+		JobID:      identity.GetJobId(),
 		Attempt:    attempt,
 		DurationMs: time.Since(startTime).Milliseconds(),
 		Error:      err,
@@ -591,11 +573,11 @@ func (s *NatsServer) handleTempError(msg jetstream.Msg, err error, durableName, 
 	_ = msg.NakWithDelay(time.Duration(natsErrorTimeout) * time.Second)
 }
 
-func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, result string, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, result string, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
 	result = jsonclean.CleanJSON(result)
-	logger.Info("AI_Service", "AI Output for Job %s:\n%s", j, result)
+	logger.Info("AI_Service", "AI Output for Job %s:\n%s", identity.GetJobId(), result)
 
-	docUri := getDocumentUri(req)
+	docUri, _ := getDocumentUri(req)
 	uriStr := docUri
 	if uriStr == "" {
 		uriStr = "N/A"
@@ -648,9 +630,9 @@ func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.M
 			Stream:     "WORKERS",
 			Subject:    msg.Subject(),
 			Consumer:   durableName,
-			TenantID:   t,
-			AppID:      a,
-			JobID:      j,
+			TenantID:   identity.GetTenantId(),
+			AppID:      identity.GetAppId(),
+			JobID:      identity.GetJobId(),
 			Attempt:    attempt,
 			DurationMs: time.Since(startTime).Milliseconds(),
 			Error:      err,
@@ -660,14 +642,14 @@ func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.M
 	}
 
 	if replySubj != "" {
-		s.publishSuccessReply(ctx, msg, replySubj, respBytes, durableName, t, a, j, attempt, startTime)
+		s.publishSuccessReply(ctx, msg, replySubj, respBytes, durableName, identity, attempt, startTime)
 		return
 	}
 
-	s.ackMessage(msg, durableName, t, a, j, attempt, startTime)
+	s.ackMessage(msg, durableName, identity, attempt, startTime)
 }
 
-func (s *NatsServer) publishSuccessReply(ctx context.Context, msg jetstream.Msg, replySubj string, respBytes []byte, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) publishSuccessReply(ctx context.Context, msg jetstream.Msg, replySubj string, respBytes []byte, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
 	natsReplyDelayStr := envutil.MustGetString("NATS_REPLY_DELAY")
 	natsReplyDelay, errParse := strconv.Atoi(natsReplyDelayStr)
 	if errParse != nil || natsReplyDelay <= 0 {
@@ -680,9 +662,9 @@ func (s *NatsServer) publishSuccessReply(ctx context.Context, msg jetstream.Msg,
 		Event:     "ENQUEUED",
 		Stream:    replyStream,
 		Subject:   replySubj,
-		TenantID:  t,
-		AppID:     a,
-		JobID:     j,
+		TenantID:  identity.GetTenantId(),
+		AppID:     identity.GetAppId(),
+		JobID:     identity.GetJobId(),
 		SizeBytes: len(respBytes),
 		Error:     pubErr,
 	})
@@ -694,9 +676,9 @@ func (s *NatsServer) publishSuccessReply(ctx context.Context, msg jetstream.Msg,
 			Stream:     "WORKERS",
 			Subject:    msg.Subject(),
 			Consumer:   durableName,
-			TenantID:   t,
-			AppID:      a,
-			JobID:      j,
+			TenantID:   identity.GetTenantId(),
+			AppID:      identity.GetAppId(),
+			JobID:      identity.GetJobId(),
 			Attempt:    attempt,
 			DurationMs: time.Since(startTime).Milliseconds(),
 			Error:      pubErr,
@@ -704,10 +686,10 @@ func (s *NatsServer) publishSuccessReply(ctx context.Context, msg jetstream.Msg,
 		_ = msg.NakWithDelay(time.Duration(natsReplyDelay) * time.Second)
 		return
 	}
-	s.ackMessage(msg, durableName, t, a, j, attempt, startTime)
+	s.ackMessage(msg, durableName, identity, attempt, startTime)
 }
 
-func (s *NatsServer) ackMessage(msg jetstream.Msg, durableName, t, a, j string, attempt uint64, startTime time.Time) {
+func (s *NatsServer) ackMessage(msg jetstream.Msg, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
 	durationMs := time.Since(startTime).Milliseconds()
 	if err := msg.Ack(); err != nil {
 		logger.Info("AI_Service", "Failed to ack msg: %v", err)
@@ -720,9 +702,9 @@ func (s *NatsServer) ackMessage(msg jetstream.Msg, durableName, t, a, j string, 
 		Stream:     "WORKERS",
 		Subject:    msg.Subject(),
 		Consumer:   durableName,
-		TenantID:   t,
-		AppID:      a,
-		JobID:      j,
+		TenantID:   identity.GetTenantId(),
+		AppID:      identity.GetAppId(),
+		JobID:      identity.GetJobId(),
 		Attempt:    attempt,
 		DurationMs: durationMs,
 	})
@@ -767,10 +749,10 @@ func (s *NatsServer) logReplyError(err error) {
 
 var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 
-func (s *NatsServer) resolveModelID(subject string) string {
+func (s *NatsServer) resolveModelID(subject string) (string, error) {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		panic(fmt.Errorf("action failed: missing TaskSubject for resolveModelID"))
+		panic("action failed: missing TaskSubject for resolveModelID")
 	}
 
 	parts := strings.Split(subject, ".")
@@ -784,28 +766,28 @@ func (s *NatsServer) resolveModelID(subject string) string {
 	}
 
 	if trailingToken == "" {
-		panic(fmt.Errorf("action failed: missing TaskSubject trailing token for resolveModelID"))
+		panic("action failed: missing TaskSubject trailing token for resolveModelID")
 	}
 
 	sanitized := nonAlphanumericRegex.ReplaceAllString(trailingToken, "_")
 	upperToken := strings.ToUpper(sanitized)
 
 	if upperToken == "EMBEDDING" || upperToken == "EMBED" {
-		return envutil.MustGetEmbeddingModel()
+		return envutil.MustGetEmbeddingModel(), nil
 	}
 
 	envKey := fmt.Sprintf("MODEL_ROUTE_%s", upperToken)
-	return envutil.MustGetString(envKey)
+	return envutil.MustGetString(envKey), nil
 }
 
-func extractIsScannedFlag(req *pb.ExecuteTaskRequest) (bool, bool) {
+func extractIsScannedFlag(req *pb.ExecuteTaskRequest) (bool, bool, error) {
 	if req == nil || req.Payload == nil {
-		panic(fmt.Errorf("action failed: missing payload"))
+		panic("action failed: missing payload")
 	}
 	parser := workflowparser.NewTaskRequestParser(req)
 	funcState, err := parser.GetFunctionalState()
 	if err != nil {
-		panic(fmt.Errorf("action failed: %v", err))
+		panic(fmt.Sprintf("action failed: %v", err))
 	}
 
 	keys := []string{"is_scanned", "IsScanned"}
@@ -815,31 +797,31 @@ func extractIsScannedFlag(req *pb.ExecuteTaskRequest) (bool, bool) {
 			continue
 		}
 		if b, ok := v.(bool); ok {
-			return b, true
+			return b, true, nil
 		}
 		if s, ok := v.(string); ok {
 			s = strings.TrimSpace(strings.ToLower(s))
 			if s == "yes" || s == "true" || s == "1" {
-				return true, true
+				return true, true, nil
 			} else if s == "no" || s == "false" || s == "0" {
-				return false, true
+				return false, true, nil
 			}
 		}
-		panic(fmt.Errorf("action failed: invalid is_scanned flag value"))
+		panic("action failed: invalid is_scanned flag value")
 	}
-	return false, false
+	return false, false, nil
 }
 
-func getDocumentUri(req *pb.ExecuteTaskRequest) string {
+func getDocumentUri(req *pb.ExecuteTaskRequest) (string, error) {
 	if req == nil || req.Payload == nil {
-		panic(fmt.Errorf("action failed: missing payload"))
+		panic("action failed: missing payload")
 	}
-	
+
 	parser := workflowparser.NewTaskRequestParser(req)
 	executeTaskPayload := parser.MustGetExecuteTaskPayload()
 	if executeTaskPayload != nil && executeTaskPayload.Storage != nil {
-		return executeTaskPayload.Storage.DocumentUri
+		return executeTaskPayload.Storage.DocumentUri, nil
 	}
-	
-	return ""
+
+	return "", nil
 }

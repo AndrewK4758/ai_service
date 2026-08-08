@@ -67,7 +67,7 @@ func TestAdversarial_AIService_ModelResolutionAndVisionRoutingEdgeCases(t *testi
 					server.resolveModelID(tt.subject)
 				}()
 			} else {
-				got := server.resolveModelID(tt.subject)
+				got, _ := server.resolveModelID(tt.subject)
 				if got != tt.expected {
 					t.Errorf("resolveModelID(%q) = %q; want %q", tt.subject, got, tt.expected)
 				}

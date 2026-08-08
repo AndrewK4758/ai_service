@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
+	"path/filepath"
 	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
@@ -42,19 +42,41 @@ func forwardMetadata(ctx context.Context) context.Context {
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
-func (g *GatewayStorage) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) ([]byte, error) {
+type grpcStreamReader struct {
+	stream pb.StorageGatewayService_DownloadDocumentClient
+	buffer []byte
+}
+
+func (r *grpcStreamReader) Read(p []byte) (int, error) {
+	if len(r.buffer) > 0 {
+		n := copy(p, r.buffer)
+		r.buffer = r.buffer[n:]
+		return n, nil
+	}
+	resp, err := r.stream.Recv()
+	if err != nil {
+		return 0, err
+	}
+	if len(resp.ChunkData) == 0 {
+		return 0, nil
+	}
+	n := copy(p, resp.ChunkData)
+	if n < len(resp.ChunkData) {
+		r.buffer = resp.ChunkData[n:]
+	}
+	return n, nil
+}
+
+func (g *GatewayStorage) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) (io.Reader, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("context error: %w", err)
 	}
 
-	retryCount := g.retryCount
-	if retryCount < 0 {
-		retryCount = envutil.MustGetInt("STORAGE_FETCH_RETRY_COUNT")
+	if g.retryCount < 0 {
+		return nil, fmt.Errorf("invalid storage configuration: negative retry count")
 	}
-
-	retrySleepMs := g.retrySleepMs
-	if retrySleepMs <= 0 {
-		retrySleepMs = envutil.MustGetInt("STORAGE_FETCH_RETRY_SLEEP_MS")
+	if g.retrySleepMs <= 0 {
+		return nil, fmt.Errorf("invalid storage configuration: zero or negative retry sleep")
 	}
 
 	reqCtx := forwardMetadata(ctx)
@@ -64,35 +86,25 @@ func (g *GatewayStorage) FetchFile(ctx context.Context, relativePath string, ide
 	}
 
 	var lastErr error
-	for attempt := 0; attempt <= retryCount; attempt++ {
+	for attempt := 0; attempt <= g.retryCount; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("context error: %w", err)
 		}
 
-		if err := g.sleepBeforeRetry(ctx, attempt, retrySleepMs); err != nil {
+		if err := g.sleepBeforeRetry(ctx, attempt, g.retrySleepMs); err != nil {
 			return nil, err
 		}
 
 		stream, err := g.client.DownloadDocument(reqCtx, req)
 		if err != nil {
-			lastErr = fmt.Errorf("failed to initiate download stream for %s (attempt %d/%d): %w", relativePath, attempt+1, retryCount+1, err)
+			lastErr = fmt.Errorf("failed to initiate download stream for %s (attempt %d/%d): %w", relativePath, attempt+1, g.retryCount+1, err)
 			continue
 		}
 
-		data, streamErr := g.receiveStreamChunks(stream, relativePath)
-		if streamErr != nil {
-			lastErr = fmt.Errorf("failed during chunk receive for %s (attempt %d/%d): %w", relativePath, attempt+1, retryCount+1, streamErr)
-			continue
-		}
-
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-
-		return data, nil
+		return &grpcStreamReader{stream: stream}, nil
 	}
 
-	return nil, fmt.Errorf("storage fetch failed for %s after %d retries: %w", relativePath, retryCount, lastErr)
+	return nil, fmt.Errorf("storage fetch failed for %s after %d retries: %w", relativePath, g.retryCount, lastErr)
 }
 
 func (g *GatewayStorage) sleepBeforeRetry(ctx context.Context, attempt, retrySleepMs int) error {
@@ -107,30 +119,12 @@ func (g *GatewayStorage) sleepBeforeRetry(ctx context.Context, attempt, retrySle
 	}
 }
 
-func (g *GatewayStorage) receiveStreamChunks(stream pb.StorageGatewayService_DownloadDocumentClient, relativePath string) ([]byte, error) {
-	var data []byte
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			return data, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to receive chunk for %s: %w", relativePath, err)
-		}
-		data = append(data, resp.ChunkData...)
-	}
-}
-
-func (g *GatewayStorage) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data []byte) (string, error) {
+func (g *GatewayStorage) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data io.Reader) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", fmt.Errorf("context error: %w", err)
 	}
 
-	parts := strings.SplitN(relativePath, "/", 2)
-	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid save path format, expected jobID/filename, got: %s", relativePath)
-	}
-	filename := parts[1]
+	filename := filepath.Base(relativePath)
 
 	reqCtx := forwardMetadata(ctx)
 	stream, err := g.client.UploadDocument(reqCtx)
@@ -150,20 +144,29 @@ func (g *GatewayStorage) SaveFile(ctx context.Context, relativePath string, iden
 		return "", fmt.Errorf("failed to send upload metadata for %s: %w", filename, err)
 	}
 
-	chunkSize := 64 * 1024
-	for i := 0; i < len(data); i += chunkSize {
-		end := i + chunkSize
-		if end > len(data) {
-			end = len(data)
-		}
+	chunkSize := envutil.MustGetInt("UPLOAD_CHUNK_SIZE")
+	if chunkSize <= 0 {
+		chunkSize = 64 * 1024
+	}
 
-		err = stream.Send(&pb.UploadRequest{
-			UploadElement: &pb.UploadRequest_ChunkData{
-				ChunkData: data[i:end],
-			},
-		})
+	buf := make([]byte, chunkSize)
+	for {
+		n, err := data.Read(buf)
+		if n > 0 {
+			sendErr := stream.Send(&pb.UploadRequest{
+				UploadElement: &pb.UploadRequest_ChunkData{
+					ChunkData: buf[:n],
+				},
+			})
+			if sendErr != nil {
+				return "", fmt.Errorf("failed to send chunk for %s: %w", filename, sendErr)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
-			return "", fmt.Errorf("failed to send chunk for %s: %w", filename, err)
+			return "", fmt.Errorf("error reading data for %s: %w", filename, err)
 		}
 	}
 

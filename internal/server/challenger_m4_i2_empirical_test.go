@@ -1,6 +1,5 @@
 package server
 
-
 import (
 	"context"
 	"fmt"
@@ -103,8 +102,7 @@ func TestChallengerM4I2_PanicFailFastScenarios(t *testing.T) {
 	})
 
 	t.Run("6. Invalid is_scanned Flag Value Panics", func(t *testing.T) {
-		payload, _ := structpb.NewStruct(map[string]any{
-		})
+		payload, _ := structpb.NewStruct(map[string]any{})
 		req := &pb.ExecuteTaskRequest{
 			Identity: &pb.InfrastructureIdentity{TenantId: "tenant1", AppId: "app1", JobId: "job1"},
 			Payload:  payload,

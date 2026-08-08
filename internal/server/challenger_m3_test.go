@@ -1,9 +1,10 @@
 package server
 
-
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -128,19 +129,19 @@ func TestChallenger_NatsServer_ErrorContractFormat_Comprehensive(t *testing.T) {
 }
 
 type storageManagerMock interface {
-	FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) ([]byte, error)
-	SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data []byte) (string, error)
+	FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) (io.Reader, error)
+	SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data io.Reader) (string, error)
 }
 
 type failingStore struct {
 	err error
 }
 
-func (f *failingStore) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) ([]byte, error) {
+func (f *failingStore) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) (io.Reader, error) {
 	return nil, f.err
 }
 
-func (f *failingStore) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data []byte) (string, error) {
+func (f *failingStore) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data io.Reader) (string, error) {
 	return "", f.err
 }
 
@@ -148,11 +149,11 @@ type workingStore struct {
 	data []byte
 }
 
-func (w *workingStore) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) ([]byte, error) {
-	return w.data, nil
+func (w *workingStore) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) (io.Reader, error) {
+	return bytes.NewReader(w.data), nil
 }
 
-func (w *workingStore) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data []byte) (string, error) {
+func (w *workingStore) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data io.Reader) (string, error) {
 	return relativePath, nil
 }
 
@@ -194,7 +195,7 @@ func TestChallenger_NatsServer_ConcurrentProcessingStress(t *testing.T) {
 			defer wg.Done()
 			st, _ := structpb.NewStruct(map[string]any{
 				"node_config": map[string]any{},
-				"storage": map[string]any{"document_uri": "internal-store://edge/doc.txt"},
+				"storage":     map[string]any{"document_uri": "internal-store://edge/doc.txt"},
 				"global_state": map[string]any{
 					"functional": map[string]any{},
 				},

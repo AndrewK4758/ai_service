@@ -1,9 +1,10 @@
 package server
 
-
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -53,13 +54,13 @@ type memoryAuditStorage struct {
 	payload []byte
 }
 
-func (m *memoryAuditStorage) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) ([]byte, error) {
+func (m *memoryAuditStorage) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) (io.Reader, error) {
 	c := make([]byte, len(m.payload))
 	copy(c, m.payload)
-	return c, nil
+	return bytes.NewReader(c), nil
 }
 
-func (m *memoryAuditStorage) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data []byte) (string, error) {
+func (m *memoryAuditStorage) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data io.Reader) (string, error) {
 	return relativePath, nil
 }
 
@@ -93,7 +94,7 @@ func TestResiliency_NatsServer_JITMemoryDiscarding(t *testing.T) {
 
 	st, _ := structpb.NewStruct(map[string]any{
 		"node_config": map[string]any{},
-		"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.txt"},
+		"storage":     map[string]any{"document_uri": "internal-store://t/a/j/doc.txt"},
 		"global_state": map[string]any{
 			"functional": map[string]any{},
 		},
@@ -146,7 +147,7 @@ func TestResiliency_NatsServer_HighConcurrencyStress(t *testing.T) {
 			defer wg.Done()
 			st, _ := structpb.NewStruct(map[string]any{
 				"node_config": map[string]any{},
-				"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.txt"},
+				"storage":     map[string]any{"document_uri": "internal-store://t/a/j/doc.txt"},
 				"global_state": map[string]any{
 					"functional": map[string]any{},
 				},

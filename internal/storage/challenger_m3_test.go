@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -16,8 +17,8 @@ import (
 // TestChallenger_FetchFile_ChunkInterruptionWithExpiredContext tests when context expires mid-stream between chunks.
 func TestChallenger_FetchFile_ChunkInterruptionWithExpiredContext(t *testing.T) {
 	client := &mockMultiAttemptGatewayClient{
-		streamFunc: func(call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
-			return &slowChunkStream{
+		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
+			return &slowChunkStream{ctx: ctx,
 				chunks: [][]byte{
 					[]byte("chunk1"),
 					[]byte("chunk2"),
@@ -33,16 +34,20 @@ func TestChallenger_FetchFile_ChunkInterruptionWithExpiredContext(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	_, err := store.FetchFile(ctx, "internal-store://t/a/j/slow_stream.pdf", nil)
+	data, err := store.FetchFile(ctx, "internal-store://t/a/j/slow_stream.pdf", nil)
+	if err == nil {
+		_, err = io.ReadAll(data)
+	}
 	if err == nil {
 		t.Fatalf("expected context error on timeout mid-stream, got nil error")
 	}
-	if err != context.DeadlineExceeded {
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Logf("Got error: %v (expected context.DeadlineExceeded)", err)
 	}
 }
 
 type slowChunkStream struct {
+	ctx context.Context
 	grpc.ClientStream
 	chunks             [][]byte
 	delayBetweenChunks time.Duration
@@ -53,7 +58,11 @@ func (s *slowChunkStream) Recv() (*pb.DownloadResponse, error) {
 	if s.index >= len(s.chunks) {
 		return nil, io.EOF
 	}
-	time.Sleep(s.delayBetweenChunks)
+	select {
+	case <-time.After(s.delayBetweenChunks):
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
 	chunk := s.chunks[s.index]
 	s.index++
 	return &pb.DownloadResponse{ChunkData: chunk}, nil
@@ -63,7 +72,7 @@ func (s *slowChunkStream) Recv() (*pb.DownloadResponse, error) {
 func TestChallenger_FetchFile_RetryExhaustion_DetailedError(t *testing.T) {
 	var attempts int32
 	client := &mockMultiAttemptGatewayClient{
-		streamFunc: func(call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
+		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
 			atomic.AddInt32(&attempts, 1)
 			return nil, fmt.Errorf("rpc failure attempt %d", call)
 		},
@@ -95,7 +104,7 @@ func TestChallenger_FetchFile_RetryExhaustion_DetailedError(t *testing.T) {
 func TestChallenger_FetchFile_HighConcurrencyStress(t *testing.T) {
 	var totalRPCs int64
 	client := &mockMultiAttemptGatewayClient{
-		streamFunc: func(call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
+		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
 			atomic.AddInt64(&totalRPCs, 1)
 			return &mockDownloadStream{
 				responses: []*pb.DownloadResponse{
@@ -123,8 +132,8 @@ func TestChallenger_FetchFile_HighConcurrencyStress(t *testing.T) {
 				errCh <- fmt.Errorf("goroutine %d failed: %w", id, err)
 				return
 			}
-			if string(data) != "stress_test_chunk_data" {
-				errCh <- fmt.Errorf("goroutine %d got unexpected data: %s", id, string(data))
+			if func() string { buf, _ := io.ReadAll(data); return string(buf) }() != "stress_test_chunk_data" {
+				errCh <- fmt.Errorf("goroutine %d got unexpected data: %s", id, func() string { buf, _ := io.ReadAll(data); return string(buf) }())
 				return
 			}
 		}(i)

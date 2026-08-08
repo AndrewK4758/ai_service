@@ -1,6 +1,5 @@
 package server
 
-
 import (
 	"context"
 	"fmt"
@@ -52,9 +51,7 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 			server := NewNatsServer(nil, js, analyzer, store, 1, "test", 1, 1, 8192)
 
 			globalState := map[string]any{
-				"functional": map[string]any{
-					
-				},
+				"functional": map[string]any{},
 			}
 			if tc.funcState != nil {
 				for k, v := range tc.funcState {
@@ -131,7 +128,7 @@ func TestChallenger2_RapidConcurrentPDFSwitching(t *testing.T) {
 			isScanned := id%2 == 0
 			payload, _ := structpb.NewStruct(map[string]any{
 				"node_config": map[string]any{},
-				"storage": map[string]any{"document_uri": "internal-store://edge/doc.txt"},
+				"storage":     map[string]any{"document_uri": "internal-store://edge/doc.txt"},
 				"global_state": map[string]any{
 					"functional": map[string]any{
 						"is_scanned": isScanned,

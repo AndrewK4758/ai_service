@@ -14,7 +14,6 @@ import (
 	"github.com/AndrewK4758/shared_utils/envutil"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
-
 )
 
 // AnthropicAnalyzer implements the Analyzer interface for Anthropic Messages REST API endpoints
@@ -32,33 +31,42 @@ type AnthropicAnalyzer struct {
 func NewAnthropicAnalyzer(config OpenAIConfig) (*AnthropicAnalyzer, error) {
 	apiKey := config.AnthropicAPIKey
 	if apiKey == "" {
-		apiKey = config.AuthToken
+		apiKey = envutil.MustGetString("ANTHROPIC_API_KEY")
+		if apiKey == "" {
+			panic(fmt.Errorf("missing required config: AnthropicAPIKey"))
+		}
 	}
 
 	baseURL := config.AnthropicBaseURL
 	if baseURL == "" {
-		panic(fmt.Errorf("missing required config: AnthropicBaseURL"))
+		baseURL = envutil.MustGetString("ANTHROPIC_BASE_URL")
+		if baseURL == "" {
+			panic(fmt.Errorf("missing required config: AnthropicBaseURL"))
+		}
 	}
 
 	version := config.AnthropicVersion
 	if version == "" {
-		panic(fmt.Errorf("missing required config: AnthropicVersion"))
+		version = envutil.MustGetString("ANTHROPIC_VERSION")
+		if version == "" {
+			panic(fmt.Errorf("missing required config: AnthropicVersion"))
+		}
 	}
 
 	textModel := config.AnthropicTextModel
 	if textModel == "" {
-		textModel = config.TextModel
-	}
-	if textModel == "" {
-		textModel = envutil.MustGetString("ANTHROPIC_MODEL")
+		textModel = envutil.MustGetString("ANTHROPIC_TEXT_MODEL")
+		if textModel == "" {
+			panic(fmt.Errorf("missing required config: AnthropicTextModel"))
+		}
 	}
 
 	visionModel := config.AnthropicVisionModel
 	if visionModel == "" {
-		visionModel = config.VisionModel
-	}
-	if visionModel == "" {
-		visionModel = envutil.MustGetString("ANTHROPIC_MODEL")
+		visionModel = envutil.MustGetString("ANTHROPIC_VISION_MODEL")
+		if visionModel == "" {
+			panic(fmt.Errorf("missing required config: AnthropicVisionModel"))
+		}
 	}
 
 	client := config.HTTPClient
@@ -195,9 +203,6 @@ func (a *AnthropicAnalyzer) AnalyzeText(ctx context.Context, text string, req *p
 
 	m := modelID
 	if m == "" {
-		m = a.textModel
-	}
-	if m == "" {
 		panic(fmt.Errorf("missing modelID in Anthropic AnalyzeText"))
 	}
 
@@ -223,7 +228,11 @@ func (a *AnthropicAnalyzer) AnalyzeText(ctx context.Context, text string, req *p
 		},
 	}
 
-	return a.callAnthropic(ctx, reqBody)
+	resp, err := a.callAnthropic(ctx, reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to call Anthropic for text analysis: %w", err)
+	}
+	return resp, nil
 }
 
 func (a *AnthropicAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
@@ -238,20 +247,18 @@ func (a *AnthropicAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byt
 
 	for _, img := range imageBytes {
 		base64Img := base64.StdEncoding.EncodeToString(img)
+		mediaType := http.DetectContentType(img)
 		contentBlocks = append(contentBlocks, anthropicContentBlock{
 			Type: "image",
 			Source: &anthropicImageSource{
 				Type:      "base64",
-				MediaType: "image/jpeg",
+				MediaType: mediaType,
 				Data:      base64Img,
 			},
 		})
 	}
 
 	m := modelID
-	if m == "" {
-		m = a.visionModel
-	}
 	if m == "" {
 		panic(fmt.Errorf("missing modelID in Anthropic AnalyzeImage"))
 	}
@@ -273,7 +280,11 @@ func (a *AnthropicAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byt
 		},
 	}
 
-	return a.callAnthropic(ctx, reqBody)
+	resp, err := a.callAnthropic(ctx, reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to call Anthropic for image analysis: %w", err)
+	}
+	return resp, nil
 }
 
 func (a *AnthropicAnalyzer) GenerateEmbedding(ctx context.Context, text string, modelID string) ([]float32, error) {

@@ -1,6 +1,5 @@
 package server
 
-
 import (
 	"context"
 	"fmt"
@@ -18,11 +17,11 @@ import (
 )
 
 type modelTrackingAnalyzer struct {
-	mu                  sync.Mutex
-	visionCalls         int64
-	textCalls           int64
-	defaultCalls        int64
-	lastModelByJob      map[string]string
+	mu             sync.Mutex
+	visionCalls    int64
+	textCalls      int64
+	defaultCalls   int64
+	lastModelByJob map[string]string
 }
 
 func newModelTrackingAnalyzer() *modelTrackingAnalyzer {
@@ -104,12 +103,12 @@ func TestChallenger_DynamicModelRouting_RaceAndConcurrency(t *testing.T) {
 			jobID := fmt.Sprintf("job_stress_%d", id)
 			payloadMap := map[string]any{
 				"node_config": map[string]any{},
-				"storage": map[string]any{"document_uri": "internal-store://edge/doc.txt"},
+				"storage":     map[string]any{"document_uri": "internal-store://edge/doc.txt"},
 				"global_state": map[string]any{
 					"functional": map[string]any{},
 				},
 			}
-			
+
 			switch id % 3 {
 			case 0:
 				payloadMap["global_state"].(map[string]any)["functional"].(map[string]any)["is_scanned"] = true
@@ -118,7 +117,7 @@ func TestChallenger_DynamicModelRouting_RaceAndConcurrency(t *testing.T) {
 			case 2:
 				// No IsScanned flag -> should fall back to resolveModelID(subject)
 			}
-			
+
 			payload, _ := structpb.NewStruct(payloadMap)
 
 			req := &pb.ExecuteTaskRequest{
@@ -208,9 +207,7 @@ func TestChallenger_DynamicModelRouting_EdgeCaseFlags(t *testing.T) {
 			server := NewNatsServer(nil, js, analyzer, store, 1, "test", 1, 1, 8192)
 
 			globalState := map[string]any{
-				"functional": map[string]any{
-					
-				},
+				"functional": map[string]any{},
 			}
 			if tc.funcState != nil {
 				for k, v := range tc.funcState {

@@ -1,10 +1,10 @@
 package server
 
-
 import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/nats-io/nats.go/jetstream"
@@ -56,7 +56,7 @@ func assertPanicEquals(t *testing.T, f func(), expectedMsg string) {
 }
 
 func TestEmpirical_FailFastScenarios(t *testing.T) {
-	srv := &NatsServer{}
+	srv := &NatsServer{keepAliveManager: NewKeepAliveManager(time.Minute)}
 	ctx := context.Background()
 
 	t.Run("Scenario_1:_Malformed_proto_payload_in_processMessage_->_must_panic", func(t *testing.T) {
@@ -123,7 +123,7 @@ func TestEmpirical_FailFastScenarios(t *testing.T) {
 	t.Run("Scenario_5:_Malformed_scanned_flag_in_extractIsScannedFlag_->_must_panic", func(t *testing.T) {
 		st, _ := structpb.NewStruct(map[string]any{
 			"storage": map[string]any{"document_uri": "internal-store://edge/doc.txt"},
-				"global_state": map[string]any{
+			"global_state": map[string]any{
 				"functional": map[string]any{
 					"is_scanned": "invalid_boolean_string",
 				},

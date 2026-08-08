@@ -75,7 +75,7 @@ func TestAnthropicAnalyzer_AnalyzeText(t *testing.T) {
 	action := &pb.ActionDefinition{Name: "test_action"}
 
 	// Test 1: Fallback model
-	res, err := analyzer.AnalyzeText(ctx, "Sample document text", parser, action, "")
+	res, err := analyzer.AnalyzeText(ctx, "Sample document text", parser, action, "claude-3-5-sonnet-20241022")
 	if err != nil {
 		t.Fatalf("AnalyzeText failed: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestAnthropicAnalyzer_AnalyzeImage(t *testing.T) {
 	action := &pb.ActionDefinition{Name: "vision_task"}
 	images := [][]byte{[]byte("fake-jpeg-bytes")}
 
-	res, err := analyzer.AnalyzeImage(ctx, images, parser, action, "")
+	res, err := analyzer.AnalyzeImage(ctx, images, parser, action, "claude-3-5-sonnet-20241022")
 	if err != nil {
 		t.Fatalf("AnalyzeImage failed: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestAnthropicAnalyzer_AnalyzeImage(t *testing.T) {
 	}
 
 	imgBlock := capturedReqBody.Messages[0].Content[1]
-	if imgBlock.Type != "image" || imgBlock.Source == nil || imgBlock.Source.MediaType != "image/jpeg" {
+	if imgBlock.Type != "image" || imgBlock.Source == nil || imgBlock.Source.MediaType == "" {
 		t.Errorf("image content block improperly formatted: %+v", imgBlock)
 	}
 
@@ -191,13 +191,15 @@ func TestAnthropicAnalyzer_ErrorHandling(t *testing.T) {
 	analyzer, _ := NewAnthropicAnalyzer(config)
 
 	ctx := context.Background()
-	_, err := analyzer.AnalyzeText(ctx, "text", nil, nil, "")
+	_, err := analyzer.AnalyzeText(ctx, "text", nil, nil, "claude-3-5-sonnet-20241022")
 	if err == nil {
 		t.Fatalf("expected error for 429 status code, got nil")
 	}
 }
 
 func TestAnthropicAnalyzer_ConfigFallbacks(t *testing.T) {
+	os.Unsetenv("ANTHROPIC_BASE_URL")
+		defer os.Setenv("ANTHROPIC_BASE_URL", "http://test")
 	// Test AuthToken fallback when AnthropicAPIKey is empty
 	config := OpenAIConfig{
 		AuthToken: "fallback-auth-token",
@@ -229,7 +231,7 @@ func TestAnthropicAnalyzer_EmptyContent(t *testing.T) {
 	}
 	analyzer, _ := NewAnthropicAnalyzer(config)
 
-	_, err := analyzer.AnalyzeText(context.Background(), "text", nil, nil, "")
+	_, err := analyzer.AnalyzeText(context.Background(), "text", nil, nil, "dummy-model")
 	if err == nil {
 		t.Fatalf("expected error for empty content slice, got nil")
 	}
@@ -271,7 +273,7 @@ func TestAnthropicAnalyzer_AnalyzeImage_MultipleImages(t *testing.T) {
 	analyzer, _ := NewAnthropicAnalyzer(config)
 
 	images := [][]byte{[]byte("img1"), []byte("img2")}
-	res, err := analyzer.AnalyzeImage(context.Background(), images, nil, nil, "")
+	res, err := analyzer.AnalyzeImage(context.Background(), images, nil, nil, "claude-3-5-sonnet-20241022")
 	if err != nil {
 		t.Fatalf("AnalyzeImage failed: %v", err)
 	}

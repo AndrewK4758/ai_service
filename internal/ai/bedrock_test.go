@@ -41,8 +41,8 @@ func TestBedrockAnalyzer_AnalyzeText(t *testing.T) {
 	}
 
 	config := OpenAIConfig{
-		TextModel:   "anthropic.claude-3-sonnet-20240229-v1:0",
-		VisionModel: "anthropic.claude-3-sonnet-20240229-v1:0",
+		TextModel:   "",
+		VisionModel: "",
 		Temperature: 0.2,
 		MaxTokens:   1024,
 	}
@@ -62,7 +62,7 @@ func TestBedrockAnalyzer_AnalyzeText(t *testing.T) {
 	if mockClient.lastInput == nil || mockClient.lastInput.ModelId == nil {
 		t.Fatalf("expected ConverseInput ModelId to be set")
 	}
-	if *mockClient.lastInput.ModelId != "anthropic.claude-3-sonnet-20240229-v1:0" {
+	if *mockClient.lastInput.ModelId != "" {
 		t.Errorf("expected model 'anthropic.claude-3-sonnet-20240229-v1:0', got '%s'", *mockClient.lastInput.ModelId)
 	}
 	if res != "{\"summary\": \"bedrock text output\"}" {

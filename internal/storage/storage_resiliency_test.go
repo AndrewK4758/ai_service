@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -19,7 +20,7 @@ func TestResiliency_RetryCountAndSleepVerification(t *testing.T) {
 
 	var callCount int64
 	client := &mockMultiAttemptGatewayClient{
-		streamFunc: func(call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
+		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
 			atomic.AddInt64(&callCount, 1)
 			return nil, fmt.Errorf("simulated storage failure attempt %d", call)
 		},
@@ -49,7 +50,7 @@ func TestResiliency_RetryCountAndSleepVerification(t *testing.T) {
 func TestResiliency_ImmediateContextTimeout(t *testing.T) {
 	var callCount int64
 	client := &mockMultiAttemptGatewayClient{
-		streamFunc: func(call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
+		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
 			atomic.AddInt64(&callCount, 1)
 			return nil, nil
 		},
@@ -60,7 +61,7 @@ func TestResiliency_ImmediateContextTimeout(t *testing.T) {
 	cancel() // Cancel before start
 
 	_, err := store.FetchFile(ctx, "internal-store://tenant/app/job/doc.pdf", nil)
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 	if atomic.LoadInt64(&callCount) != 0 {
@@ -71,7 +72,7 @@ func TestResiliency_ImmediateContextTimeout(t *testing.T) {
 // TestResiliency_StreamRecvContextError verifies context error during chunk receiving.
 func TestResiliency_StreamRecvContextError(t *testing.T) {
 	client := &mockMultiAttemptGatewayClient{
-		streamFunc: func(call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
+		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
 			return &contextAwareDownloadStream{}, nil
 		},
 	}
@@ -99,8 +100,8 @@ func (s *contextAwareDownloadStream) Recv() (*pb.DownloadResponse, error) {
 // TestResiliency_EOFWithExpiredContext tests when stream returns EOF after context has expired.
 func TestResiliency_EOFWithExpiredContext(t *testing.T) {
 	client := &mockMultiAttemptGatewayClient{
-		streamFunc: func(call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
-			return &eofAfterDelayStream{delay: 30 * time.Millisecond}, nil
+		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
+			return &eofAfterDelayStream{ctx: ctx,delay: 30 * time.Millisecond}, nil
 		},
 	}
 
@@ -108,26 +109,34 @@ func TestResiliency_EOFWithExpiredContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	_, err := store.FetchFile(ctx, "internal-store://tenant/app/job/eof_delay.pdf", nil)
-	if err != context.DeadlineExceeded {
+	data, err := store.FetchFile(ctx, "internal-store://tenant/app/job/eof_delay.pdf", nil)
+	if err == nil {
+		_, err = io.ReadAll(data)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded when context expires during stream recv, got: %v", err)
 	}
 }
 
 type eofAfterDelayStream struct {
+	ctx context.Context
 	grpc.ClientStream
 	delay time.Duration
 }
 
 func (s *eofAfterDelayStream) Recv() (*pb.DownloadResponse, error) {
-	time.Sleep(s.delay)
+	select {
+	case <-time.After(s.delay):
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
 	return &pb.DownloadResponse{ChunkData: []byte("partial")}, io.EOF
 }
 
 // TestResiliency_HighConcurrencyRaceDetector stress tests GatewayStorage under high parallel load.
 func TestResiliency_HighConcurrencyRaceDetector(t *testing.T) {
 	client := &mockMultiAttemptGatewayClient{
-		streamFunc: func(call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
+		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
 			return &mockDownloadStream{
 				responses: []*pb.DownloadResponse{
 					{ChunkData: []byte("concurrent_data_chunk")},
@@ -151,8 +160,8 @@ func TestResiliency_HighConcurrencyRaceDetector(t *testing.T) {
 				done <- err
 				return
 			}
-			if string(data) != "concurrent_data_chunk" {
-				done <- fmt.Errorf("unexpected content: %s", string(data))
+			if func() string { buf, _ := io.ReadAll(data); return string(buf) }() != "concurrent_data_chunk" {
+				done <- fmt.Errorf("unexpected content: %s", func() string { buf, _ := io.ReadAll(data); return string(buf) }())
 				return
 			}
 			done <- nil

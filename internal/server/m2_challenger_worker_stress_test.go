@@ -1,6 +1,5 @@
 package server
 
-
 import (
 	"testing"
 
@@ -40,7 +39,7 @@ func TestM2Challenger_AIService_IsScannedRootIgnored(t *testing.T) {
 	})
 	reqValid := &pb.ExecuteTaskRequest{Payload: validPayload}
 
-	valValid, foundValid := extractIsScannedFlag(reqValid)
+	valValid, foundValid, _ := extractIsScannedFlag(reqValid)
 	if !foundValid || !valValid {
 		t.Fatalf("expected extractIsScannedFlag to find true in global_state.functional, got found=%v, val=%v", foundValid, valValid)
 	}
@@ -49,13 +48,13 @@ func TestM2Challenger_AIService_IsScannedRootIgnored(t *testing.T) {
 // TestM2Challenger_AIService_DocumentUriRootSupported verifies that root payload DocumentUri is supported
 func TestM2Challenger_AIService_DocumentUriRootSupported(t *testing.T) {
 	rootPayload := createTestPayloadStruct(map[string]interface{}{
-		"node_config": map[string]interface{}{},
+		"node_config":  map[string]interface{}{},
 		"global_state": map[string]interface{}{},
-		"storage": map[string]interface{}{"document_uri": "s3://root/file.pdf"},
+		"storage":      map[string]interface{}{"document_uri": "s3://root/file.pdf"},
 	})
 	req := &pb.ExecuteTaskRequest{Payload: rootPayload}
 
-	uriRoot := getDocumentUri(req)
+	uriRoot, _ := getDocumentUri(req)
 	if uriRoot != "s3://root/file.pdf" {
 		t.Errorf("expected getDocumentUri to find 's3://root/file.pdf', got %q", uriRoot)
 	}

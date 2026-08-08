@@ -208,7 +208,7 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.E
 
 	resp, err := o.callOpenAI(ctx, reqBody)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to call OpenAI for text analysis: %w", err)
 	}
 	return enforceDeterministicValidation(resp, req), nil
 }
@@ -252,7 +252,7 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 
 	resp, err := o.callOpenAI(ctx, reqBody, o.config.VisionBaseURL)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to call OpenAI for image analysis: %w", err)
 	}
 	return enforceDeterministicValidation(resp, req), nil
 }
@@ -380,7 +380,6 @@ func convertExpectedSchema(schemaObj map[string]any) {
 			if propObj, isObj := v.(map[string]any); isObj {
 				if typeVal, hasType := propObj["type"]; hasType {
 					if typeStr, isStr := typeVal.(string); isStr {
-						propObj["type"] = []string{typeStr, "null"}
 						if typeStr == "object" {
 							convertExpectedSchema(propObj)
 						} else if typeStr == "array" {

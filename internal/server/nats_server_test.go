@@ -1,9 +1,10 @@
 package server
 
-
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -68,14 +69,14 @@ type mockStorageManager struct {
 	fileBytes []byte
 }
 
-func (m *mockStorageManager) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) ([]byte, error) {
+func (m *mockStorageManager) FetchFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity) (io.Reader, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return m.fileBytes, nil
+	return bytes.NewReader(m.fileBytes), nil
 }
 
-func (m *mockStorageManager) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data []byte) (string, error) {
+func (m *mockStorageManager) SaveFile(ctx context.Context, relativePath string, identity *pb.InfrastructureIdentity, data io.Reader) (string, error) {
 	return "", m.err
 }
 
@@ -95,13 +96,13 @@ type mockMsg struct {
 func (m *mockMsg) Metadata() (*jetstream.MsgMetadata, error) { return m.metadata, m.metaErr }
 func (m *mockMsg) Data() []byte                              { return m.data }
 func (m *mockMsg) Headers() nats.Header                      { return m.headers }
-func (m *mockMsg) Subject() string { 
+func (m *mockMsg) Subject() string {
 	if m.subject != "" {
 		return m.subject
 	}
-	return "worker.ai.default.a1.t1.j1" 
+	return "worker.ai.default.a1.t1.j1"
 }
-func (m *mockMsg) Reply() string                             { return "" }
+func (m *mockMsg) Reply() string { return "" }
 func (m *mockMsg) Ack() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -182,10 +183,10 @@ func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 
 func TestExtractIsScannedFlag(t *testing.T) {
 	st, _ := structpb.NewStruct(map[string]any{
-		
+
 		"node_config": map[string]any{},
-		"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
-				"global_state": map[string]any{
+		"storage":     map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
+		"global_state": map[string]any{
 			"functional": map[string]any{
 				"is_scanned": true,
 			},
@@ -194,13 +195,11 @@ func TestExtractIsScannedFlag(t *testing.T) {
 	req := &pb.ExecuteTaskRequest{
 		Payload: st,
 	}
-	isScanned, hasFlag := extractIsScannedFlag(req)
+	isScanned, hasFlag, _ := extractIsScannedFlag(req)
 	if !hasFlag || !isScanned {
 		t.Errorf("expected true, got %v, %v", isScanned, hasFlag)
 	}
 }
-
-
 
 const sampleTestPDF = `%PDF-1.4
 1 0 obj <</Type /Catalog /Pages 2 0 R>> endobj
@@ -239,7 +238,7 @@ func TestNatsServer_ModelRoutingOverride_ScannedPDF(t *testing.T) {
 
 	st, _ := structpb.NewStruct(map[string]any{
 		"node_config": map[string]any{},
-		"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
+		"storage":     map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
 		"global_state": map[string]any{
 			"functional": map[string]any{
 				"is_scanned": true,
@@ -292,13 +291,12 @@ func TestNatsServer_ModelRoutingOverride_StructuredTextPDF(t *testing.T) {
 	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1, 8192)
 
 	st, _ := structpb.NewStruct(map[string]any{
-		
+
 		"node_config": map[string]any{},
-		"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
-				"global_state": map[string]any{
+		"storage":     map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
+		"global_state": map[string]any{
 			"functional": map[string]any{
-				"is_scanned":   false,
-				
+				"is_scanned": false,
 			},
 		},
 	})
@@ -349,13 +347,11 @@ func TestNatsServer_ModelRoutingOverride_HasFlagFalse_Fallback(t *testing.T) {
 	server := NewNatsServer(nil, js, analyzer, mockStore, 1, "test", 1, 1, 8192)
 
 	st, _ := structpb.NewStruct(map[string]any{
-		
+
 		"node_config": map[string]any{},
-		"storage": map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
-				"global_state": map[string]any{
-			"functional": map[string]any{
-				
-			},
+		"storage":     map[string]any{"document_uri": "internal-store://t/a/j/doc.pdf"},
+		"global_state": map[string]any{
+			"functional": map[string]any{},
 		},
 	})
 	req := &pb.ExecuteTaskRequest{
@@ -386,7 +382,7 @@ func TestNatsServer_ModelRoutingOverride_HasFlagFalse_Fallback(t *testing.T) {
 	if !textCalled {
 		t.Errorf("expected AnalyzeText to be called on fallback for standard PDF")
 	}
-	expectedModelID := server.resolveModelID(req.TaskSubject)
+	expectedModelID, _ := server.resolveModelID(req.TaskSubject)
 	if lastModelID != expectedModelID {
 		t.Errorf("expected fallback modelID %q from resolveModelID, got %q", expectedModelID, lastModelID)
 	}
