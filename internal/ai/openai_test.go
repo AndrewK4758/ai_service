@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	pb "github.com/AndrewK4758/shared_protos"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestOpenAIAnalyzer_AnalyzeText(t *testing.T) {
@@ -88,7 +89,20 @@ func TestOpenAIAnalyzer_AnalyzeText(t *testing.T) {
 
 			ctx := context.Background()
 			action := &pb.ActionDefinition{Name: "test"}
-			got, err := analyzer.AnalyzeText(ctx, tt.text, nil, action, "test-text-model")
+			
+			mockSchema, _ := structpb.NewStruct(map[string]interface{}{"properties": map[string]interface{}{"foo": map[string]interface{}{}}})
+			payloadStruct, _ := structpb.NewStruct(map[string]interface{}{
+				"node_config": map[string]interface{}{
+					"expected_schema_struct": mockSchema.AsMap(),
+				},
+				"global_state": map[string]interface{}{},
+				"dynamic_input": map[string]interface{}{},
+			})
+			req := &pb.ExecuteTaskRequest{
+				Payload: payloadStruct,
+			}
+			
+			got, err := analyzer.AnalyzeText(ctx, tt.text, req, action, "test-text-model")
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("OpenAIAnalyzer.AnalyzeText() error = %v, wantErr %v", err, tt.wantErr)
@@ -127,7 +141,18 @@ func TestOpenAIAnalyzer_AnalyzeImage(t *testing.T) {
 	config.VisionModel = "test-vision-model"
 	analyzer := NewOpenAIAnalyzerWithConfig(config)
 
-	got, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fakeimage")}, nil, nil, "test-vision-model")
+	mockSchema, _ := structpb.NewStruct(map[string]interface{}{"properties": map[string]interface{}{"vision": map[string]interface{}{}}})
+	payloadStruct, _ := structpb.NewStruct(map[string]interface{}{
+		"node_config": map[string]interface{}{
+			"expected_schema_struct": mockSchema.AsMap(),
+		},
+		"global_state": map[string]interface{}{},
+		"dynamic_input": map[string]interface{}{},
+	})
+	req := &pb.ExecuteTaskRequest{
+		Payload: payloadStruct,
+	}
+	got, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fakeimage")}, req, nil, "test-vision-model")
 	if err != nil {
 		t.Errorf("OpenAIAnalyzer.AnalyzeImage() unexpected error = %v", err)
 	}
@@ -168,7 +193,18 @@ func TestOpenAIAnalyzer_AnalyzeImage_VisionBaseURL(t *testing.T) {
 	config.VisionModel = "glm-ocr"
 	analyzer := NewOpenAIAnalyzerWithConfig(config)
 
-	got, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fakeimage")}, nil, nil, "glm-ocr")
+	mockSchema, _ := structpb.NewStruct(map[string]interface{}{"properties": map[string]interface{}{"vision": map[string]interface{}{}}})
+	payloadStruct, _ := structpb.NewStruct(map[string]interface{}{
+		"node_config": map[string]interface{}{
+			"expected_schema_struct": mockSchema.AsMap(),
+		},
+		"global_state": map[string]interface{}{},
+		"dynamic_input": map[string]interface{}{},
+	})
+	req := &pb.ExecuteTaskRequest{
+		Payload: payloadStruct,
+	}
+	got, err := analyzer.AnalyzeImage(context.Background(), [][]byte{[]byte("fakeimage")}, req, nil, "glm-ocr")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

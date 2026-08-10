@@ -1,7 +1,5 @@
 package ai
 
-import "github.com/AndrewK4758/shared_utils/workflowparser"
-
 import (
 	"bytes"
 	"context"
@@ -18,7 +16,7 @@ import (
 	pb "github.com/AndrewK4758/shared_protos"
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
-
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 )
 
 func getInferenceTimeout() time.Duration {
@@ -201,8 +199,8 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.E
 				Content: prompt,
 			},
 		},
-		Temperature: o.config.Temperature,
-		MaxTokens:   o.config.MaxTokens,
+		Temperature:    o.config.Temperature,
+		MaxTokens:      o.config.MaxTokens,
 		ResponseFormat: buildResponseFormat(req),
 	}
 
@@ -245,8 +243,8 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 				Content: contentArray,
 			},
 		},
-		Temperature: o.config.Temperature,
-		MaxTokens:   o.config.MaxTokens,
+		Temperature:    o.config.Temperature,
+		MaxTokens:      o.config.MaxTokens,
 		ResponseFormat: buildResponseFormat(req),
 	}
 
@@ -333,34 +331,7 @@ func (o *OpenAIAnalyzer) GenerateEmbedding(ctx context.Context, text string, mod
 }
 
 func buildResponseFormat(req *pb.ExecuteTaskRequest) *openAIResponseFormat {
-	if req == nil {
-		return &openAIResponseFormat{Type: "json_object"}
-	}
-	schemaStr := ""
-	if req.Payload != nil {
-		parser := workflowparser.NewTaskRequestParser(req)
-		payload := parser.MustGetExecuteTaskPayload()
-		if payload.NodeConfig != nil {
-			if payload.NodeConfig.ExpectedSchema != "" {
-				schemaStr = payload.NodeConfig.ExpectedSchema
-			} else if payload.NodeConfig.ExpectedSchemaStruct != nil {
-				b, _ := payload.NodeConfig.ExpectedSchemaStruct.MarshalJSON()
-				if len(b) > 0 && string(b) != "{}" {
-					schemaStr = string(b)
-				}
-			}
-		}
-	}
-	if schemaStr == "" {
-		return &openAIResponseFormat{Type: "json_object"}
-	}
-
-	var schemaObj map[string]any
-	if err := json.Unmarshal([]byte(schemaStr), &schemaObj); err != nil {
-		return &openAIResponseFormat{Type: "json_object"}
-	}
-
-	convertExpectedSchema(schemaObj)
+	schemaObj := extractSchemaMap(req)
 
 	return &openAIResponseFormat{
 		Type: "json_schema",
@@ -372,61 +343,23 @@ func buildResponseFormat(req *pb.ExecuteTaskRequest) *openAIResponseFormat {
 	}
 }
 
-func convertExpectedSchema(schemaObj map[string]any) {
-	if props, ok := schemaObj["properties"].(map[string]any); ok {
-		var required []string
-		for k, v := range props {
-			required = append(required, k)
-			if propObj, isObj := v.(map[string]any); isObj {
-				if typeVal, hasType := propObj["type"]; hasType {
-					if typeStr, isStr := typeVal.(string); isStr {
-						if typeStr == "object" {
-							convertExpectedSchema(propObj)
-						} else if typeStr == "array" {
-							if items, ok := propObj["items"].(map[string]any); ok {
-								if itemType, ok := items["type"].(string); ok && itemType == "object" {
-									convertExpectedSchema(items)
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		schemaObj["required"] = required
-		schemaObj["additionalProperties"] = false
-	}
-}
-
-func enforceDeterministicValidation(responseStr string, req *pb.ExecuteTaskRequest) string {
+func extractSchemaMap(req *pb.ExecuteTaskRequest) map[string]any {
 	if req == nil || req.Payload == nil {
-		return responseStr
+		panic(fmt.Errorf("missing required ExpectedSchemaStruct in payload"))
 	}
 
 	parser := workflowparser.NewTaskRequestParser(req)
 	payload := parser.MustGetExecuteTaskPayload()
-	if payload.NodeConfig == nil {
-		return responseStr
+	if payload.NodeConfig == nil || payload.NodeConfig.ExpectedSchemaStruct == nil {
+		panic(fmt.Errorf("missing required ExpectedSchemaStruct in payload"))
 	}
 
-	schemaStr := ""
-	if payload.NodeConfig.ExpectedSchema != "" {
-		schemaStr = payload.NodeConfig.ExpectedSchema
-	} else if payload.NodeConfig.ExpectedSchemaStruct != nil {
-		b, _ := payload.NodeConfig.ExpectedSchemaStruct.MarshalJSON()
-		if len(b) > 0 && string(b) != "{}" {
-			schemaStr = string(b)
-		}
-	}
+	return payload.NodeConfig.ExpectedSchemaStruct.AsMap()
+}
 
-	if schemaStr == "" {
-		return responseStr
-	}
+func enforceDeterministicValidation(responseStr string, req *pb.ExecuteTaskRequest) string {
+	schemaObj := extractSchemaMap(req)
 
-	var schemaObj map[string]any
-	if err := json.Unmarshal([]byte(schemaStr), &schemaObj); err != nil {
-		return responseStr
-	}
 	props, ok := schemaObj["properties"].(map[string]any)
 	if !ok {
 		return responseStr

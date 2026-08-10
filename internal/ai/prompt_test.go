@@ -13,7 +13,11 @@ func TestBuildPrompt(t *testing.T) {
 	payload := &pb.ExecuteTaskPayload{
 		NodeConfig: &pb.NodeConfiguration{
 			SystemInstructions: "Perform audit check",
-			ExpectedSchema:     `{"type":"object"}`,
+			ExpectedSchemaStruct: &structpb.Struct{
+				Fields: map[string]*structpb.Value{
+					"type": structpb.NewStringValue("object"),
+				},
+			},
 			InferenceInputKey:  "my_input",
 		},
 		GlobalState: &structpb.Struct{

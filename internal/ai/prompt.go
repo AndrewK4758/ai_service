@@ -26,9 +26,7 @@ func buildPrompt(req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, docume
 				prompt += fmt.Sprintf("\nGlobal Job Instructions:\n%s\n", payload.NodeConfig.SystemInstructions)
 			}
 			
-			if payload.NodeConfig.ExpectedSchema != "" {
-				prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", payload.NodeConfig.ExpectedSchema)
-			} else if payload.NodeConfig.ExpectedSchemaStruct != nil {
+			if payload.NodeConfig.ExpectedSchemaStruct != nil {
 				b, _ := payload.NodeConfig.ExpectedSchemaStruct.MarshalJSON()
 				if len(b) > 0 && string(b) != "{}" {
 					prompt += fmt.Sprintf("\nYou MUST format your output strictly matching this JSON Schema:\n%s\n", string(b))
