@@ -49,7 +49,7 @@ func NewNatsServer(nc *nats.Conn, js jetstream.JetStream, analyzer ai.Analyzer, 
 	ackWaitStr := envutil.MustGetString("WORKER_ACK_WAIT")
 	ackWait, err := time.ParseDuration(ackWaitStr)
 	if err != nil {
-		ackWait = 1 * time.Minute
+		panic(fmt.Errorf("invalid WORKER_ACK_WAIT: %w", err))
 	}
 	return &NatsServer{
 		nc:                nc,
@@ -72,17 +72,16 @@ func (s *NatsServer) Start(ctx context.Context) error {
 	}
 
 	durableName := fmt.Sprintf("ai_service_workers_%s", s.queueFilter)
-	filterSubject := fmt.Sprintf("worker.ai.%s", s.queueFilter)
+	filterSubjects := []string{fmt.Sprintf("worker.ai.%s", s.queueFilter), "ai.action.>"}
 	if s.queueFilter == ">" {
 		durableName = "ai_service_workers_all"
-		filterSubject = "worker.ai.>"
+		filterSubjects = []string{"worker.ai.inference", "worker.ai.vision", "worker.ai.embedding", "ai.action.>"}
 	}
 
 	ackWaitStr := envutil.MustGetString("WORKER_ACK_WAIT")
 	ackWait, err := time.ParseDuration(ackWaitStr)
 	if err != nil {
-		logger.Warn("AI_Service", "Invalid WORKER_ACK_WAIT, defaulting to 1m: %v", err)
-		ackWait = 1 * time.Minute
+		panic(fmt.Errorf("invalid WORKER_ACK_WAIT: %w", err))
 	}
 
 	maxAck := envutil.MustGetInt("MAX_ACK_PENDING")
@@ -95,7 +94,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		cons, err = s.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
 			Durable:        durableName,
 			AckPolicy:      jetstream.AckExplicitPolicy,
-			FilterSubjects: []string{filterSubject, "ai.action.>"},
+			FilterSubjects: filterSubjects,
 			MaxAckPending:  maxAck,
 			AckWait:        ackWait,
 			MaxDeliver:     maxDeliver,
@@ -107,28 +106,74 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		time.Sleep(time.Duration(retrySleepSec) * time.Second)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to create JetStream consumer after retries: %w", err)
+		return fmt.Errorf("failed to create JetStream primary consumer after retries: %w", err)
+	}
+
+	var learningCons jetstream.Consumer
+	if s.queueFilter == ">" || s.queueFilter == "cache_learning" {
+		for range retryCount {
+			learningCons, err = s.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
+				Durable:        "ai_service_workers_cache_learning",
+				AckPolicy:      jetstream.AckExplicitPolicy,
+				FilterSubjects: []string{"worker.ai.cache_learning"},
+				MaxAckPending:  1,
+				AckWait:        ackWait,
+				MaxDeliver:     maxDeliver,
+			})
+			if err == nil {
+				break
+			}
+			logger.Info("AI_Service", "Waiting for learning consumer to be created... (%v)", err)
+			time.Sleep(time.Duration(retrySleepSec) * time.Second)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to create JetStream learning consumer after retries: %w", err)
+		}
 	}
 
 	logger.Info("AI_Service", "Starting AI consumer with WorkerPoolSize=%d, MaxAckPending=%d...", s.workerPoolSize, maxAck)
 	sem := make(chan struct{}, s.workerPoolSize)
-	cc, err := cons.Consume(func(msg jetstream.Msg) {
-		go func(m jetstream.Msg) {
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
+
+	// Start primary consumer
+	var cc jetstream.ConsumeContext
+	if s.queueFilter != "cache_learning" {
+		cc, err = cons.Consume(func(msg jetstream.Msg) {
+			go func(m jetstream.Msg) {
+				select {
+				case sem <- struct{}{}:
+					defer func() { <-sem }()
+					s.processMessage(ctx, m)
+				case <-ctx.Done():
+					_ = m.Nak()
+				}
+			}(msg)
+		}, jetstream.PullMaxMessages(s.pullMaxMessages))
+		if err != nil {
+			return fmt.Errorf("failed to start primary consuming: %w", err)
+		}
+	}
+
+	// Start learning consumer with concurrency of 1
+	var learningCc jetstream.ConsumeContext
+	if learningCons != nil {
+		logger.Info("AI_Service", "Starting AI Learning consumer with WorkerPoolSize=1, MaxAckPending=1...")
+		learningCc, err = learningCons.Consume(func(msg jetstream.Msg) {
+			go func(m jetstream.Msg) {
 				s.processMessage(ctx, m)
-			case <-ctx.Done():
-				_ = m.Nak()
-			}
-		}(msg)
-	}, jetstream.PullMaxMessages(s.pullMaxMessages))
-	if err != nil {
-		return fmt.Errorf("failed to start consuming: %w", err)
+			}(msg)
+		}, jetstream.PullMaxMessages(1))
+		if err != nil {
+			return fmt.Errorf("failed to start learning consuming: %w", err)
+		}
 	}
 
 	<-ctx.Done()
-	cc.Stop()
+	if cc != nil {
+		cc.Stop()
+	}
+	if learningCc != nil {
+		learningCc.Stop()
+	}
 	return nil
 }
 
@@ -216,22 +261,9 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	targetSubj := req.GetTaskSubject()
 
-	isScanned, hasFlag, err := extractIsScannedFlag(req)
+	modelID, err := s.resolveModelID(targetSubj)
 	if err != nil {
-		panic(fmt.Errorf("failed to extract is_scanned flag: %w", err))
-	}
-	var modelID string
-	if hasFlag {
-		if isScanned {
-			modelID = envutil.MustGetString("OPENAI_VISION_MODEL")
-		} else {
-			modelID = envutil.MustGetString("OPENAI_TEXT_MODEL")
-		}
-	} else {
-		modelID, err = s.resolveModelID(targetSubj)
-		if err != nil {
-			panic(fmt.Errorf("failed to resolve model ID: %w", err))
-		}
+		panic(fmt.Errorf("failed to resolve model ID: %w", err))
 	}
 
 	result, errCode, err := s.executeAction(ctx, req, targetSubj, modelID)
@@ -309,7 +341,7 @@ func (s *NatsServer) handleUnmarshalError(ctx context.Context, msg jetstream.Msg
 func (s *NatsServer) executeAction(ctx context.Context, req *pb.ExecuteTaskRequest, targetSubj string, modelID string) (string, string, error) {
 	docUri, err := getDocumentUri(req)
 	if err != nil {
-		return "", "INVALID_PAYLOAD", err
+		return "", "INVALID_PAYLOAD", fmt.Errorf("[Step: EXECUTE_ACTION, URI: unknown] failed to get document URI: %w", err)
 	}
 	if docUri != "" {
 		return s.processDocumentJIT(ctx, docUri, req, modelID, targetSubj)
@@ -389,14 +421,6 @@ func (s *NatsServer) dispatchBytesToAnalyzer(ctx context.Context, fileBytes []by
 	step := getStepName(req)
 	ext := strings.ToLower(filepath.Ext(docUri))
 
-	isScanned, hasFlag, _ := extractIsScannedFlag(req)
-	if hasFlag && ext == ".pdf" {
-		if isScanned {
-			return s.processPdfVisionBytes(ctx, fileBytes, step, docUri, req, modelID)
-		}
-		return s.processPdfTextBytes(ctx, fileBytes, step, docUri, req, modelID)
-	}
-
 	isVision := isVisionRequest(targetSubj, modelID, ext)
 
 	if isVision {
@@ -468,13 +492,21 @@ func getStepName(req *pb.ExecuteTaskRequest) string {
 
 func isVisionRequest(targetSubj string, modelID string, ext string) bool {
 	subjLower := strings.ToLower(targetSubj)
-	if strings.Contains(subjLower, "vision") || strings.Contains(subjLower, "image") || strings.Contains(subjLower, "ocr") {
-		return true
+	visionSubjects := envutil.GetStringOrDefault("VISION_SUBJECTS", "vision,ocr,image")
+	for _, v := range strings.Split(visionSubjects, ",") {
+		if strings.Contains(subjLower, strings.TrimSpace(v)) {
+			return true
+		}
 	}
+
 	modelLower := strings.ToLower(modelID)
-	if strings.Contains(modelLower, "vision") || strings.Contains(modelLower, "gpt-4o") || strings.Contains(modelLower, "claude-3") {
-		return true
+	visionModels := envutil.GetStringOrDefault("VISION_MODELS", "vision,gpt-4o,claude-3")
+	for _, m := range strings.Split(visionModels, ",") {
+		if strings.Contains(modelLower, strings.TrimSpace(m)) {
+			return true
+		}
 	}
+
 	if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".webp" || ext == ".tiff" || ext == ".bmp" {
 		return true
 	}
@@ -787,7 +819,7 @@ func extractIsScannedFlag(req *pb.ExecuteTaskRequest) (bool, bool, error) {
 	parser := workflowparser.NewTaskRequestParser(req)
 	funcState, err := parser.GetFunctionalState()
 	if err != nil {
-		panic(fmt.Sprintf("action failed: %v", err))
+		panic(fmt.Errorf("action failed: %w", err))
 	}
 
 	keys := []string{"is_scanned", "IsScanned"}
