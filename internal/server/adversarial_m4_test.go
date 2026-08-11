@@ -118,6 +118,8 @@ func TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths(t *testin
 
 		hdr := make(nats.Header)
 		hdr.Set("Reply-Subject", "test.reply.adv")
+		hdr.Set("X-Page-Limit", "10")
+		hdr.Set("X-Tenant-Id", "t1")
 
 		payload, _ := structpb.NewStruct(map[string]any{
 			"node_config": map[string]any{},
@@ -208,6 +210,8 @@ func TestAdversarial_AIService_JITByteDiscardAndMemoryAudit(t *testing.T) {
 		data, _ := proto.Marshal(req)
 		hdr := make(nats.Header)
 		hdr.Set("Reply-Subject", "test.reply.mem")
+		hdr.Set("X-Page-Limit", "10")
+		hdr.Set("X-Tenant-Id", "t1")
 
 		msg := &mockMsg{
 			data:    data,
@@ -266,6 +270,10 @@ func TestAdversarial_AIService_HighConcurrencyStress(t *testing.T) {
 			data, _ := proto.Marshal(req)
 			msg := &mockMsg{
 				data: data,
+				headers: nats.Header{
+					"X-Page-Limit": []string{"10"},
+					"X-Tenant-Id":  []string{"t1"},
+				},
 				metadata: &jetstream.MsgMetadata{
 					NumDelivered: 1,
 				},

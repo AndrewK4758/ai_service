@@ -71,11 +71,15 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		panic(fmt.Errorf("NATS_WORKER_STREAM is missing"))
 	}
 
-	durableName := fmt.Sprintf("ai_service_workers_%s", s.queueFilter)
-	filterSubjects := []string{fmt.Sprintf("worker.ai.%s", s.queueFilter), "ai.action.>"}
+	durableName := envutil.GetStringOrDefault("NATS_CONSUMER_NAME", "ai_service_workers_all")
+	var filterSubjects []string
 	if s.queueFilter == ">" {
-		durableName = "ai_service_workers_all"
-		filterSubjects = []string{"worker.ai.inference", "worker.ai.vision", "worker.ai.embedding", "ai.action.>"}
+		filterSubjects = []string{"worker.ai.>", "ai.action.>"}
+	} else {
+		filterSubjects = strings.Split(s.queueFilter, ",")
+		for i := range filterSubjects {
+			filterSubjects[i] = strings.TrimSpace(filterSubjects[i])
+		}
 	}
 
 	ackWaitStr := envutil.MustGetString("WORKER_ACK_WAIT")
@@ -109,70 +113,29 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create JetStream primary consumer after retries: %w", err)
 	}
 
-	var learningCons jetstream.Consumer
-	if s.queueFilter == ">" || s.queueFilter == "cache_learning" {
-		for range retryCount {
-			learningCons, err = s.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
-				Durable:        "ai_service_workers_cache_learning",
-				AckPolicy:      jetstream.AckExplicitPolicy,
-				FilterSubjects: []string{"worker.ai.cache_learning"},
-				MaxAckPending:  1,
-				AckWait:        ackWait,
-				MaxDeliver:     maxDeliver,
-			})
-			if err == nil {
-				break
-			}
-			logger.Info("AI_Service", "Waiting for learning consumer to be created... (%v)", err)
-			time.Sleep(time.Duration(retrySleepSec) * time.Second)
-		}
-		if err != nil {
-			return fmt.Errorf("failed to create JetStream learning consumer after retries: %w", err)
-		}
-	}
-
-	logger.Info("AI_Service", "Starting AI consumer with WorkerPoolSize=%d, MaxAckPending=%d...", s.workerPoolSize, maxAck)
+	logger.Info("AI_Service", "Starting AI consumer '%s' with WorkerPoolSize=%d, MaxAckPending=%d...", durableName, s.workerPoolSize, maxAck)
 	sem := make(chan struct{}, s.workerPoolSize)
 
 	// Start primary consumer
 	var cc jetstream.ConsumeContext
-	if s.queueFilter != "cache_learning" {
-		cc, err = cons.Consume(func(msg jetstream.Msg) {
-			go func(m jetstream.Msg) {
-				select {
-				case sem <- struct{}{}:
-					defer func() { <-sem }()
-					s.processMessage(ctx, m)
-				case <-ctx.Done():
-					_ = m.Nak()
-				}
-			}(msg)
-		}, jetstream.PullMaxMessages(s.pullMaxMessages))
-		if err != nil {
-			return fmt.Errorf("failed to start primary consuming: %w", err)
-		}
-	}
-
-	// Start learning consumer with concurrency of 1
-	var learningCc jetstream.ConsumeContext
-	if learningCons != nil {
-		logger.Info("AI_Service", "Starting AI Learning consumer with WorkerPoolSize=1, MaxAckPending=1...")
-		learningCc, err = learningCons.Consume(func(msg jetstream.Msg) {
-			go func(m jetstream.Msg) {
+	cc, err = cons.Consume(func(msg jetstream.Msg) {
+		go func(m jetstream.Msg) {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
 				s.processMessage(ctx, m)
-			}(msg)
-		}, jetstream.PullMaxMessages(1))
-		if err != nil {
-			return fmt.Errorf("failed to start learning consuming: %w", err)
-		}
+			case <-ctx.Done():
+				_ = m.Nak()
+			}
+		}(msg)
+	}, jetstream.PullMaxMessages(s.pullMaxMessages))
+	if err != nil {
+		return fmt.Errorf("failed to start primary consuming: %w", err)
 	}
 
 	<-ctx.Done()
 	if cc != nil {
 		cc.Stop()
-	}
-	if learningCc != nil {
-		learningCc.Stop()
 	}
 	return nil
 }
@@ -196,10 +159,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 		attempt = meta.NumDelivered
 	}
 
-	durableName := fmt.Sprintf("ai_service_workers_%s", s.queueFilter)
-	if s.queueFilter == ">" {
-		durableName = "ai_service_workers_all"
-	}
+	durableName := "ai_service_workers_all"
 
 	t, a, j := natsutil.ExtractIdentityFromAiSubject(msg.Subject())
 	identity := &pb.InfrastructureIdentity{TenantId: t, AppId: a, JobId: j}
@@ -231,6 +191,41 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	s.keepAliveManager.Add(msgId, msg)
 	defer s.keepAliveManager.Remove(msgId)
 
+	headers := msg.Headers()
+	if headers == nil || headers.Get("X-Page-Limit") == "" || headers.Get("X-Tenant-Id") == "" {
+		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+			Component:  "AI_Service",
+			Event:      "IMPOSSIBLE_STATE",
+			Stream:     "WORKERS",
+			Subject:    msg.Subject(),
+			Consumer:   durableName,
+			TenantID:   t,
+			AppID:      a,
+			JobID:      j,
+			Attempt:    attempt,
+			DurationMs: time.Since(startTime).Milliseconds(),
+			Error:      fmt.Errorf("go_worker_missing_headers: X-Page-Limit or X-Tenant-Id missing"),
+		})
+		panic(fmt.Errorf("absolute Fail Fast: required headers (X-Page-Limit, X-Tenant-Id) missing from payload"))
+	}
+	pageLimitStr := headers.Get("X-Page-Limit")
+	if _, err := strconv.Atoi(pageLimitStr); err != nil {
+		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
+			Component:  "AI_Service",
+			Event:      "IMPOSSIBLE_STATE",
+			Stream:     "WORKERS",
+			Subject:    msg.Subject(),
+			Consumer:   durableName,
+			TenantID:   t,
+			AppID:      a,
+			JobID:      j,
+			Attempt:    attempt,
+			DurationMs: time.Since(startTime).Milliseconds(),
+			Error:      fmt.Errorf("go_worker_missing_headers: X-Page-Limit malformed"),
+		})
+		panic(fmt.Errorf("absolute Fail Fast: X-Page-Limit header is malformed"))
+	}
+
 	logger.Info("AI_Service", "Received action request on subject: %s", msg.Subject())
 	replySubj := getReplySubject(msg)
 
@@ -261,9 +256,22 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	targetSubj := req.GetTaskSubject()
 
-	modelID, err := s.resolveModelID(targetSubj)
+	isScanned, hasFlag, err := extractIsScannedFlag(req)
 	if err != nil {
-		panic(fmt.Errorf("failed to resolve model ID: %w", err))
+		panic(fmt.Errorf("failed to extract is_scanned flag: %w", err))
+	}
+	var modelID string
+	if hasFlag {
+		if isScanned {
+			modelID = envutil.MustGetString("OPENAI_VISION_MODEL")
+		} else {
+			modelID = envutil.MustGetString("OPENAI_TEXT_MODEL")
+		}
+	} else {
+		modelID, err = s.resolveModelID(targetSubj)
+		if err != nil {
+			panic(fmt.Errorf("failed to resolve model ID: %w", err))
+		}
 	}
 
 	result, errCode, err := s.executeAction(ctx, req, targetSubj, modelID)

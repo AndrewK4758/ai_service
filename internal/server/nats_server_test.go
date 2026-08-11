@@ -95,7 +95,22 @@ type mockMsg struct {
 
 func (m *mockMsg) Metadata() (*jetstream.MsgMetadata, error) { return m.metadata, m.metaErr }
 func (m *mockMsg) Data() []byte                              { return m.data }
-func (m *mockMsg) Headers() nats.Header                      { return m.headers }
+func (m *mockMsg) Headers() nats.Header {
+	if m.headers == nil {
+		m.headers = make(nats.Header)
+	}
+	if m.headers.Get("X-Test-No-Defaults") == "true" {
+		delete(m.headers, "X-Test-No-Defaults")
+		return m.headers
+	}
+	if m.headers.Get("X-Page-Limit") == "" {
+		m.headers.Set("X-Page-Limit", "10")
+	}
+	if m.headers.Get("X-Tenant-Id") == "" {
+		m.headers.Set("X-Tenant-Id", "t1")
+	}
+	return m.headers
+}
 func (m *mockMsg) Subject() string {
 	if m.subject != "" {
 		return m.subject
@@ -170,6 +185,10 @@ func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 
 	msg := &mockMsg{
 		data: data,
+		headers: nats.Header{
+			"X-Page-Limit": []string{"10"},
+			"X-Tenant-Id":  []string{"t1"},
+		},
 		metadata: &jetstream.MsgMetadata{
 			NumDelivered: 1,
 		},
@@ -228,6 +247,7 @@ startxref
 func TestNatsServer_ModelRoutingOverride_ScannedPDF(t *testing.T) {
 	t.Setenv("OPENAI_VISION_MODEL", "glm-ocr")
 	t.Setenv("OPENAI_TEXT_MODEL", "gemma4-extended")
+	t.Setenv("VISION_MODELS", "glm-ocr")
 
 	js := &mockJS{}
 	analyzer := &trackingAnalyzer{}
@@ -255,6 +275,10 @@ func TestNatsServer_ModelRoutingOverride_ScannedPDF(t *testing.T) {
 
 	msg := &mockMsg{
 		data: data,
+		headers: nats.Header{
+			"X-Page-Limit": []string{"10"},
+			"X-Tenant-Id":  []string{"t1"},
+		},
 		metadata: &jetstream.MsgMetadata{
 			NumDelivered: 1,
 		},
@@ -310,6 +334,10 @@ func TestNatsServer_ModelRoutingOverride_StructuredTextPDF(t *testing.T) {
 
 	msg := &mockMsg{
 		data: data,
+		headers: nats.Header{
+			"X-Page-Limit": []string{"10"},
+			"X-Tenant-Id":  []string{"t1"},
+		},
 		metadata: &jetstream.MsgMetadata{
 			NumDelivered: 1,
 		},
@@ -364,6 +392,10 @@ func TestNatsServer_ModelRoutingOverride_HasFlagFalse_Fallback(t *testing.T) {
 
 	msg := &mockMsg{
 		data: data,
+		headers: nats.Header{
+			"X-Page-Limit": []string{"10"},
+			"X-Tenant-Id":  []string{"t1"},
+		},
 		metadata: &jetstream.MsgMetadata{
 			NumDelivered: 1,
 		},
@@ -400,6 +432,10 @@ func TestNatsServer_processMessage_InvalidIdentity_FailFast(t *testing.T) {
 
 	msg := &mockMsg{
 		data: data,
+		headers: nats.Header{
+			"X-Page-Limit": []string{"10"},
+			"X-Tenant-Id":  []string{"t1"},
+		},
 		metadata: &jetstream.MsgMetadata{
 			NumDelivered: 1,
 		},
@@ -427,6 +463,10 @@ func TestNatsServer_processMessage_MissingTaskSubject_FailFast(t *testing.T) {
 
 	msg := &mockMsg{
 		data: data,
+		headers: nats.Header{
+			"X-Page-Limit": []string{"10"},
+			"X-Tenant-Id":  []string{"t1"},
+		},
 		metadata: &jetstream.MsgMetadata{
 			NumDelivered: 1,
 		},
@@ -440,4 +480,69 @@ func TestNatsServer_processMessage_MissingTaskSubject_FailFast(t *testing.T) {
 	}()
 
 	server.processMessage(context.Background(), msg)
+}
+
+func TestNatsServer_processMessage_Headers_FailFast(t *testing.T) {
+	js := &mockJS{}
+	analyzer := &mockAnalyzer{}
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1, 8192)
+
+	req := &pb.ExecuteTaskRequest{
+		Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+		TaskSubject: "worker.ai.default",
+	}
+	data, _ := proto.Marshal(req)
+
+	tests := []struct {
+		name    string
+		headers nats.Header
+	}{
+		{
+			name:    "Missing X-Page-Limit and X-Tenant-Id",
+			headers: nats.Header{"X-Test-No-Defaults": []string{"true"}},
+		},
+		{
+			name: "Missing X-Tenant-Id",
+			headers: nats.Header{
+				"X-Page-Limit":       []string{"10"},
+				"X-Test-No-Defaults": []string{"true"},
+			},
+		},
+		{
+			name: "Missing X-Page-Limit",
+			headers: nats.Header{
+				"X-Tenant-Id":        []string{"t1"},
+				"X-Test-No-Defaults": []string{"true"},
+			},
+		},
+		{
+			name: "Malformed X-Page-Limit",
+			headers: nats.Header{
+				"X-Page-Limit":       []string{"invalid"},
+				"X-Tenant-Id":        []string{"t1"},
+				"X-Test-No-Defaults": []string{"true"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &mockMsg{
+				data:    data,
+				headers: tt.headers,
+				metadata: &jetstream.MsgMetadata{
+					NumDelivered: 1,
+				},
+			}
+
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Errorf("expected panic for %s", tt.name)
+				}
+			}()
+
+			server.processMessage(context.Background(), msg)
+		})
+	}
 }
