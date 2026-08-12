@@ -191,40 +191,6 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	s.keepAliveManager.Add(msgId, msg)
 	defer s.keepAliveManager.Remove(msgId)
 
-	headers := msg.Headers()
-	if headers == nil || headers.Get("X-Page-Limit") == "" || headers.Get("X-Tenant-Id") == "" || headers.Get("X-App-Id") == "" {
-		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-			Component:  "AI_Service",
-			Event:      "IMPOSSIBLE_STATE",
-			Stream:     "WORKERS",
-			Subject:    msg.Subject(),
-			Consumer:   durableName,
-			TenantID:   t,
-			AppID:      a,
-			JobID:      j,
-			Attempt:    attempt,
-			DurationMs: time.Since(startTime).Milliseconds(),
-			Error:      fmt.Errorf("go_worker_missing_headers: X-Page-Limit, X-Tenant-Id, or X-App-Id missing"),
-		})
-		panic(fmt.Errorf("absolute Fail Fast: required headers (X-Page-Limit, X-Tenant-Id, X-App-Id) missing from payload"))
-	}
-	pageLimitStr := headers.Get("X-Page-Limit")
-	if _, err := strconv.Atoi(pageLimitStr); err != nil {
-		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
-			Component:  "AI_Service",
-			Event:      "IMPOSSIBLE_STATE",
-			Stream:     "WORKERS",
-			Subject:    msg.Subject(),
-			Consumer:   durableName,
-			TenantID:   t,
-			AppID:      a,
-			JobID:      j,
-			Attempt:    attempt,
-			DurationMs: time.Since(startTime).Milliseconds(),
-			Error:      fmt.Errorf("go_worker_missing_headers: X-Page-Limit malformed"),
-		})
-		panic(fmt.Errorf("absolute Fail Fast: X-Page-Limit header is malformed"))
-	}
 
 	logger.Info("AI_Service", "Received action request on subject: %s", msg.Subject())
 	replySubj := getReplySubject(msg)
