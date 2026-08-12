@@ -192,7 +192,7 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	defer s.keepAliveManager.Remove(msgId)
 
 	headers := msg.Headers()
-	if headers == nil || headers.Get("X-Page-Limit") == "" || headers.Get("X-Tenant-Id") == "" {
+	if headers == nil || headers.Get("X-Page-Limit") == "" || headers.Get("X-Tenant-Id") == "" || headers.Get("X-App-Id") == "" {
 		natsutil.LogJetStreamEvent(natsutil.JetStreamLogEvent{
 			Component:  "AI_Service",
 			Event:      "IMPOSSIBLE_STATE",
@@ -204,9 +204,9 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 			JobID:      j,
 			Attempt:    attempt,
 			DurationMs: time.Since(startTime).Milliseconds(),
-			Error:      fmt.Errorf("go_worker_missing_headers: X-Page-Limit or X-Tenant-Id missing"),
+			Error:      fmt.Errorf("go_worker_missing_headers: X-Page-Limit, X-Tenant-Id, or X-App-Id missing"),
 		})
-		panic(fmt.Errorf("absolute Fail Fast: required headers (X-Page-Limit, X-Tenant-Id) missing from payload"))
+		panic(fmt.Errorf("absolute Fail Fast: required headers (X-Page-Limit, X-Tenant-Id, X-App-Id) missing from payload"))
 	}
 	pageLimitStr := headers.Get("X-Page-Limit")
 	if _, err := strconv.Atoi(pageLimitStr); err != nil {
