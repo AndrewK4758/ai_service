@@ -119,15 +119,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 	// Start primary consumer
 	var cc jetstream.ConsumeContext
 	cc, err = cons.Consume(func(msg jetstream.Msg) {
-		go func(m jetstream.Msg) {
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-				s.processMessage(ctx, m)
-			case <-ctx.Done():
-				_ = m.Nak()
-			}
-		}(msg)
+		go s.handleMessage(ctx, msg, sem)
 	}, jetstream.PullMaxMessages(s.pullMaxMessages))
 	if err != nil {
 		return fmt.Errorf("failed to start primary consuming: %w", err)
@@ -138,6 +130,30 @@ func (s *NatsServer) Start(ctx context.Context) error {
 		cc.Stop()
 	}
 	return nil
+}
+
+func (s *NatsServer) handleMessage(ctx context.Context, m jetstream.Msg, sem chan struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			t, a, j := natsutil.ExtractIdentityFromAiSubject(m.Subject())
+			logger.Info("AI_Service", "Recovered from panic in worker goroutine for Tenant=%s App=%s Job=%s: %v", t, a, j, r)
+			
+			natsErrorTimeoutStr := envutil.GetStringOrDefault("NATS_NACK_ERROR_TIMEOUT", "15")
+			natsErrorTimeout, errParse := strconv.Atoi(natsErrorTimeoutStr)
+			if errParse != nil || natsErrorTimeout <= 0 {
+				natsErrorTimeout = 15
+			}
+			_ = m.NakWithDelay(time.Duration(natsErrorTimeout) * time.Second)
+		}
+	}()
+
+	select {
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
+		s.processMessage(ctx, m)
+	case <-ctx.Done():
+		_ = m.Nak()
+	}
 }
 
 func getReplySubject(msg jetstream.Msg) string {

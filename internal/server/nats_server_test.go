@@ -481,3 +481,42 @@ func TestNatsServer_processMessage_MissingTaskSubject_FailFast(t *testing.T) {
 
 	server.processMessage(context.Background(), msg)
 }
+
+func TestNatsServer_handleMessage_PoisonPillPanic_NakWithDelay(t *testing.T) {
+	js := &mockJS{}
+	analyzer := &mockAnalyzer{}
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1, 8192)
+
+	// Create a request missing TaskSubject which will cause processMessage to panic
+	req := &pb.ExecuteTaskRequest{
+		Identity: &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+	}
+	data, _ := proto.Marshal(req)
+
+	msg := &mockMsg{
+		data: data,
+		headers: nats.Header{
+			"X-Page-Limit": []string{"10"},
+			"X-Tenant-Id":  []string{"t1"},
+		},
+		metadata: &jetstream.MsgMetadata{
+			NumDelivered: 1,
+		},
+	}
+
+	sem := make(chan struct{}, 1)
+
+	// Set a timeout environment variable for NakWithDelay
+	t.Setenv("NATS_NACK_ERROR_TIMEOUT", "10")
+
+	// Call handleMessage directly. It should recover from the panic and call NakWithDelay.
+	server.handleMessage(context.Background(), msg, sem)
+
+	if !msg.nakCalled {
+		t.Errorf("expected NakWithDelay to be called when processMessage panics")
+	}
+	
+	if msg.nakDelay != 10*time.Second {
+		t.Errorf("expected NakWithDelay to be 10s, got %v", msg.nakDelay)
+	}
+}
