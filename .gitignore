@@ -30,3 +30,8 @@ go.work.sum
 *_bin.exe
 bin/
 bin
+obj/
+obj
+cmake-build-*/
+out/
+.vs/

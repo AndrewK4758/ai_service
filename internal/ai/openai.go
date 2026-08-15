@@ -36,6 +36,7 @@ type OpenAIConfig struct {
 	AuthToken            string
 	BaseURL              string
 	VisionBaseURL        string
+	EmbeddingBaseURL     string
 	APIType              APIType
 	APIVersion           string
 	HTTPClient           *http.Client
@@ -282,7 +283,11 @@ func (o *OpenAIAnalyzer) GenerateEmbedding(ctx context.Context, text string, mod
 		return nil, fmt.Errorf("failed to marshal openai request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/embeddings", strings.TrimSuffix(o.config.BaseURL, "/"))
+	baseURL := o.config.BaseURL
+	if o.config.EmbeddingBaseURL != "" {
+		baseURL = o.config.EmbeddingBaseURL
+	}
+	url := fmt.Sprintf("%s/embeddings", strings.TrimSuffix(baseURL, "/"))
 	logger.Info("AI_Service", "[Ai Service] Sending request to %s with model %s", url, m)
 
 	timeout := o.config.HTTPClient.Timeout

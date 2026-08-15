@@ -103,6 +103,7 @@ func main() {
 	config.VisionModel = aiVisionModel
 	visionBaseURL := envutil.MustGetString("OPENAI_VISION_BASE_URL")
 	config.VisionBaseURL = visionBaseURL
+	config.EmbeddingBaseURL = envutil.GetStringOrDefault("EMBEDDING_BASE_URL", aiHost)
 	config.EmbeddingModel = aiEmbeddingModel
 	config.Temperature = float32(temperature)
 	config.MaxTokens = maxTokens
