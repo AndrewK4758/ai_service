@@ -216,12 +216,14 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 		panic(fmt.Errorf("failed to unmarshal ExecuteTaskRequest: %w", err))
 	}
 
+	logger.Info("AI_Service", "[DEQUEUED PAYLOAD] Processing JobID: %s, Step: %s", req.GetIdentity().GetJobId(), req.GetTaskSubject())
+
 	if reqJson, err := protojson.Marshal(req); err == nil {
-		logger.Info("AI_Service", "[DEQUEUED PAYLOAD] Full ExecuteTaskRequest: %s", string(reqJson))
+		logger.Debug("AI_Service", "[DEQUEUED PAYLOAD] Full ExecuteTaskRequest: %s", string(reqJson))
 	}
 
 	if req.Payload != nil {
-		logger.Info("Input payload", "%s: %+v", "payload", req.Payload.AsMap())
+		logger.Debug("Input payload", "%s: %+v", "payload", req.Payload.AsMap())
 	}
 
 	// Fail-Fast Assertion 1: Infrastructure Identity Validation
@@ -597,7 +599,7 @@ func (s *NatsServer) handleTempError(msg jetstream.Msg, err error, durableName s
 
 func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, result string, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
 	result = jsonclean.CleanJSON(result)
-	logger.Info("AI_Service", "AI Output for Job %s:\n%s", identity.GetJobId(), result)
+	logger.Debug("AI_Service", "AI Output for Job %s:\n%s", identity.GetJobId(), result)
 
 	docUri, _ := getDocumentUri(req)
 	uriStr := docUri
@@ -636,11 +638,11 @@ func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.M
 	}
 
 	if respJson, err := protojson.Marshal(resp); err == nil {
-		logger.Info("AI_Service", "[EXECUTION SUCCESS PAYLOAD] Full PerformActionResponse: %s", string(respJson))
+		logger.Debug("AI_Service", "[EXECUTION SUCCESS PAYLOAD] Full PerformActionResponse: %s", string(respJson))
 	}
 
 	if resp.ActionResult != nil {
-		logger.Info("Output payload", "%s: %+v", "payload", resp.ActionResult.AsMap())
+		logger.Debug("Output payload", "%s: %+v", "payload", resp.ActionResult.AsMap())
 	}
 
 	respBytes, err := proto.Marshal(resp)

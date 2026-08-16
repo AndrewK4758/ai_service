@@ -85,16 +85,19 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.
 
 	logger.Info("AI_Service", "[Ai Service] Sending Bedrock request to model %s", m)
 	if reqBytes, err := json.Marshal(converseReq); err == nil {
-		logger.Info("AI_Service", "[Ai Service] Bedrock Converse Request Body: %s", string(reqBytes))
+		logger.Debug("AI_Service", "[Ai Service] Bedrock Converse Request Body: %s", string(reqBytes))
 	}
 
 	resp, err := b.client.Converse(ctx, converseReq)
 	if err != nil {
+		if reqBytes, marshalErr := json.Marshal(converseReq); marshalErr == nil {
+			logger.Error("AI_Service", "[Ai Service] Bedrock Request Failed. Request Body: %s", string(reqBytes))
+		}
 		return "", fmt.Errorf("bedrock inference failed: %w", err)
 	}
 
 	if respBytes, err := json.Marshal(resp); err == nil {
-		logger.Info("AI_Service", "[Ai Service] Bedrock Raw Response Output: %s", string(respBytes))
+		logger.Debug("AI_Service", "[Ai Service] Bedrock Raw Response Output: %s", string(respBytes))
 	}
 
 	msg, ok := resp.Output.(*types.ConverseOutputMemberMessage)
@@ -155,16 +158,19 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 
 	logger.Info("AI_Service", "[Ai Service] Sending Bedrock Vision request to model %s", m)
 	if reqBytes, err := json.Marshal(converseReq); err == nil {
-		logger.Info("AI_Service", "[Ai Service] Bedrock Converse Request Body: %s", string(reqBytes))
+		logger.Debug("AI_Service", "[Ai Service] Bedrock Converse Request Body: %s", string(reqBytes))
 	}
 
 	resp, err := b.client.Converse(ctx, converseReq)
 	if err != nil {
+		if reqBytes, marshalErr := json.Marshal(converseReq); marshalErr == nil {
+			logger.Error("AI_Service", "[Ai Service] Bedrock Vision Request Failed. Request Body: %s", string(reqBytes))
+		}
 		return "", fmt.Errorf("bedrock vision inference failed: %w", err)
 	}
 
 	if respBytes, err := json.Marshal(resp); err == nil {
-		logger.Info("AI_Service", "[Ai Service] Bedrock Raw Response Output: %s", string(respBytes))
+		logger.Debug("AI_Service", "[Ai Service] Bedrock Raw Response Output: %s", string(respBytes))
 	}
 
 	msg, ok := resp.Output.(*types.ConverseOutputMemberMessage)

@@ -153,11 +153,12 @@ func (a *AnthropicAnalyzer) callAnthropic(ctx context.Context, reqBody anthropic
 	req.Header.Set("x-api-key", a.apiKey)
 	req.Header.Set("anthropic-version", a.version)
 
-	logger.Info("AI_Service", "[Ai Service] Sending Anthropic request to %s with model %s", url, reqBody.Model)
-	logger.Info("AI_Service", "[Ai Service] Request Body: %s", string(jsonData))
+	logger.Info("AI_Service", "[Ai Service] Sending Anthropic request to %s with model %s (Payload Size: %d bytes)", url, reqBody.Model, len(jsonData))
+	logger.Debug("AI_Service", "[Ai Service] Request Body: %s", string(jsonData))
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
+		logger.Error("AI_Service", "[Ai Service] Request Failed. Request Body: %s", string(jsonData))
 		return "", fmt.Errorf("LLM inference timed out or failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -167,10 +168,11 @@ func (a *AnthropicAnalyzer) callAnthropic(ctx context.Context, reqBody anthropic
 		return "", fmt.Errorf("failed to read anthropic response body: %w", err)
 	}
 
-	logger.Info("AI_Service", "[Ai Service] Received Anthropic response status %d", resp.StatusCode)
-	logger.Info("AI_Service", "[Ai Service] Raw Response Body: %s", string(bodyBytes))
+	logger.Info("AI_Service", "[Ai Service] Received Anthropic response status %d (Response Size: %d bytes)", resp.StatusCode, len(bodyBytes))
+	logger.Debug("AI_Service", "[Ai Service] Raw Response Body: %s", string(bodyBytes))
 
 	if resp.StatusCode != http.StatusOK {
+		logger.Error("AI_Service", "[Ai Service] Request Failed with status %d. Request Body: %s, Response Body: %s", resp.StatusCode, string(jsonData), string(bodyBytes))
 		return "", fmt.Errorf("anthropic endpoint returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 

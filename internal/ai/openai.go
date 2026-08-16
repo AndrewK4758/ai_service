@@ -148,11 +148,12 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest, 
 		req.Header.Set("Authorization", "Bearer "+o.config.AuthToken)
 	}
 
-	logger.Info("AI_Service", "[Ai Service] Sending request to %s with model %s", url, reqBody.Model)
-	logger.Info("AI_Service", "[Ai Service] Request Body: %s", string(jsonData))
+	logger.Info("AI_Service", "[Ai Service] Sending request to %s with model %s (Payload Size: %d bytes)", url, reqBody.Model, len(jsonData))
+	logger.Debug("AI_Service", "[Ai Service] Request Body: %s", string(jsonData))
 
 	resp, err := o.config.HTTPClient.Do(req)
 	if err != nil {
+		logger.Error("AI_Service", "[Ai Service] Request Failed. Request Body: %s", string(jsonData))
 		return "", fmt.Errorf("LLM inference timed out or failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -162,10 +163,11 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest, 
 		return "", fmt.Errorf("failed to read openai response body: %w", err)
 	}
 
-	logger.Info("AI_Service", "[Ai Service] Received response status %d", resp.StatusCode)
-	logger.Info("AI_Service", "[Ai Service] Raw Response Body: %s", string(bodyBytes))
+	logger.Info("AI_Service", "[Ai Service] Received response status %d (Response Size: %d bytes)", resp.StatusCode, len(bodyBytes))
+	logger.Debug("AI_Service", "[Ai Service] Raw Response Body: %s", string(bodyBytes))
 
 	if resp.StatusCode != http.StatusOK {
+		logger.Error("AI_Service", "[Ai Service] Request Failed with status %d. Request Body: %s, Response Body: %s", resp.StatusCode, string(jsonData), string(bodyBytes))
 		return "", fmt.Errorf("openai endpoint returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -185,7 +187,7 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest, 
 
 func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(req, action, text)
-	logger.Info("AI_Service", "[Ai Service] Built Prompt before sending:\n%s\n", prompt)
+	logger.Debug("AI_Service", "[Ai Service] Built Prompt before sending:\n%s\n", prompt)
 
 	m := modelID
 	if m == "" {
