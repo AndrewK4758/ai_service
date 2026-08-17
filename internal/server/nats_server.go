@@ -234,11 +234,12 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	identity = req.GetIdentity()
 
 	// Fail-Fast Assertion 2: Required TaskSubject Validation
-	if req.GetTaskSubject() == "" {
+	if req.GetTaskSubject() == pb.WorkerSubject_WORKER_SUBJECT_UNSPECIFIED {
 		panic("action failed: missing required TaskSubject")
 	}
 
 	targetSubj := req.GetTaskSubject()
+	targetSubjStr := targetSubj.String()
 
 	isScanned, hasFlag, err := extractIsScannedFlag(req)
 	if err != nil {
@@ -252,13 +253,13 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 			modelID = envutil.MustGetString("OPENAI_TEXT_MODEL")
 		}
 	} else {
-		modelID, err = s.resolveModelID(targetSubj)
+		modelID, err = s.resolveModelID(targetSubjStr)
 		if err != nil {
 			panic(fmt.Errorf("failed to resolve model ID: %w", err))
 		}
 	}
 
-	result, errCode, err := s.executeAction(ctx, req, targetSubj, modelID)
+	result, errCode, err := s.executeAction(ctx, req, targetSubjStr, modelID)
 	if err != nil {
 		s.handleExecutionError(ctx, msg, replySubj, req, errCode, err, durableName, identity, attempt, startTime)
 		return
@@ -610,7 +611,7 @@ func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.M
 
 	var outputMap map[string]any
 	if err := json.Unmarshal([]byte(result), &outputMap); err != nil {
-		if strings.HasPrefix(req.TaskSubject, "worker.ai.ocr") || strings.HasPrefix(req.TaskSubject, "worker.ai.vision") || req.TaskSubject == "worker.ai.inference" {
+		if req.GetTaskSubject() == pb.WorkerSubject_WORKER_AI_VISION || req.GetTaskSubject() == pb.WorkerSubject_WORKER_AI_INFERENCE {
 			outputMap = map[string]any{
 				"result": result,
 			}
@@ -795,6 +796,8 @@ func (s *NatsServer) resolveModelID(subject string) (string, error) {
 
 	sanitized := nonAlphanumericRegex.ReplaceAllString(trailingToken, "_")
 	upperToken := strings.ToUpper(sanitized)
+	upperToken = strings.TrimPrefix(upperToken, "WORKER_AI_")
+	upperToken = strings.TrimPrefix(upperToken, "WORKER_")
 
 	if upperToken == "EMBEDDING" || upperToken == "EMBED" {
 		return envutil.MustGetEmbeddingModel(), nil
