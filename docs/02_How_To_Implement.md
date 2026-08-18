@@ -32,11 +32,14 @@ docker-compose up -d --build
 
 **Local Development (Linux/macOS):**
 ```bash
+cd ai_service
 export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
 export NATS_URL=nats://127.0.0.1:4222
 export SERVER_PORT=11111
 go run cmd/server/main.go
 ```
+
+> **Note**: To cleanly build and run all ecosystem microservices simultaneously with correct relative paths and multiplexed logs, execute `./scripts/run_all.zsh` from the project root instead.
 
 ## Service Discovery & Dynamic Model Routing
 The service dynamically maps physical LLM model IDs from incoming NATS JetStream subjects (e.g., `worker.doc.chunking`).
