@@ -234,12 +234,11 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	identity = req.GetIdentity()
 
 	// Fail-Fast Assertion 2: Required TaskSubject Validation
-	if req.GetTaskSubject() == pb.WorkerSubject_WORKER_SUBJECT_UNSPECIFIED {
+	if req.GetTaskSubject() == "" {
 		panic("action failed: missing required TaskSubject")
 	}
 
-	targetSubj := req.GetTaskSubject()
-	targetSubjStr := targetSubj.String()
+	targetSubjStr := req.GetTaskSubject()
 
 	isScanned, hasFlag, err := extractIsScannedFlag(req)
 	if err != nil {
@@ -611,7 +610,7 @@ func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.M
 
 	var outputMap map[string]any
 	if err := json.Unmarshal([]byte(result), &outputMap); err != nil {
-		if req.GetTaskSubject() == pb.WorkerSubject_WORKER_AI_VISION || req.GetTaskSubject() == pb.WorkerSubject_WORKER_AI_INFERENCE {
+		if req.GetTaskSubject() == "worker.ai.vision" || req.GetTaskSubject() == "worker.ai.inference" {
 			outputMap = map[string]any{
 				"result": result,
 			}
