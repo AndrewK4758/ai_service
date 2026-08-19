@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 
 	pb "github.com/AndrewK4758/shared_protos"
@@ -11,6 +12,11 @@ import (
 )
 
 var whitespaceRegex = regexp.MustCompile(`\s+`)
+
+// NormalizeJsonOutput is an alias for NormalizeVisionOutput to enforce deterministic schema validation across all text and vision tasks.
+func NormalizeJsonOutput(responseStr string, req *pb.ExecuteTaskRequest) string {
+	return NormalizeVisionOutput(responseStr, req)
+}
 
 // NormalizeVisionOutput cleans, parses, and normalizes vision model JSON outputs according to schema contracts.
 func NormalizeVisionOutput(responseStr string, req *pb.ExecuteTaskRequest) string {
@@ -166,9 +172,18 @@ func normalizeNumber(val any) any {
 		return nil
 	}
 	if str, ok := val.(string); ok {
-		if cleanString(str) == nil {
+		cleaned := cleanString(str)
+		if cleaned == nil {
 			return nil
 		}
+		cleanStr, ok := cleaned.(string)
+		if !ok {
+			return nil
+		}
+		if f, err := strconv.ParseFloat(cleanStr, 64); err == nil {
+			return f
+		}
+		return nil
 	}
 	return val
 }

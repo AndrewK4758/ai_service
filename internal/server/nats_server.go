@@ -239,35 +239,18 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	targetSubjStr := req.GetTaskSubject()
 
-	var modelID string
-	if overrideModel, ok := extractModelOverride(req); ok && overrideModel != "" {
-		modelID = overrideModel
-	} else {
-		isScanned, hasFlag, err := extractIsScannedFlag(req)
-		if err != nil {
-			panic(fmt.Errorf("failed to extract is_scanned flag: %w", err))
-		}
-		if hasFlag {
-			if isScanned {
-				modelID = envutil.MustGetString("OPENAI_VISION_MODEL")
-			} else {
-				modelID = envutil.MustGetString("OPENAI_TEXT_MODEL")
-			}
-		} else {
-			modelID, err = s.resolveModelID(targetSubjStr)
-			if err != nil {
-				panic(fmt.Errorf("failed to resolve model ID: %w", err))
-			}
-		}
-	}
+	modelID, tier := s.ResolveModelRoute(req, targetSubjStr)
+	step := getStepName(req)
+
+	s.publishAITaskTraceEvent(ctx, identity, step, "AI_TASK_STARTED", modelID, targetSubjStr, tier, 0, 0, 0, 0)
 
 	result, errCode, err := s.executeAction(ctx, req, targetSubjStr, modelID)
 	if err != nil {
-		s.handleExecutionError(ctx, msg, replySubj, req, errCode, err, durableName, identity, attempt, startTime)
+		s.handleExecutionError(ctx, msg, replySubj, req, errCode, err, durableName, identity, attempt, startTime, modelID, targetSubjStr, tier)
 		return
 	}
 
-	s.handleExecutionSuccess(ctx, msg, replySubj, req, result, durableName, identity, attempt, startTime)
+	s.handleExecutionSuccess(ctx, msg, replySubj, req, result, durableName, identity, attempt, startTime, modelID, targetSubjStr, tier)
 }
 
 func (s *NatsServer) handleExceededRetries(ctx context.Context, msg jetstream.Msg, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
@@ -525,16 +508,13 @@ func isVisionRequest(targetSubj string, modelID string, ext string) bool {
 	return false
 }
 
-func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, errCode string, err error, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
-	if ctx.Err() != nil {
-		s.handleContextCanceled(msg, durableName, identity, attempt, startTime)
-		return
-	}
-	logger.Info("AI_Service", "AI processing failed: %v", err)
+func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, errCode string, err error, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time, modelID string, route string, tier int) {
 	errStr := strings.ToLower(err.Error())
+	step := getStepName(req)
+	durationMs := time.Since(startTime).Milliseconds()
 
-	if errCode != "LARGE_DOCUMENT_EXCEEDED" {
-		isRateLimit := strings.Contains(errStr, "429") || strings.Contains(errStr, "too many requests") || strings.Contains(errStr, "throttlingexception") || strings.Contains(errStr, "quota")
+	if attempt < 5 {
+		isRateLimit := strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "resource_exhausted")
 		if isRateLimit {
 			s.handleRateLimitError(msg, err, durableName, identity, attempt, startTime)
 			return
@@ -550,6 +530,9 @@ func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg
 	if errCode == "" {
 		errCode = "AI_PROCESSING_FAILED"
 	}
+	s.publishAITaskTraceEvent(ctx, identity, step, "AI_TASK_FAILED", modelID, route, tier, durationMs, 0, 0, 0)
+	s.routeToDLQ(ctx, msg, identity, errCode, err)
+
 	errReply := s.sendErrorReply(ctx, replySubj, err.Error(), errCode)
 	if errReply != nil {
 		logger.Info("AI_Service", "Failed to send error reply: %v", errReply)
@@ -564,7 +547,7 @@ func (s *NatsServer) handleExecutionError(ctx context.Context, msg jetstream.Msg
 		AppID:      identity.GetAppId(),
 		JobID:      identity.GetJobId(),
 		Attempt:    attempt,
-		DurationMs: time.Since(startTime).Milliseconds(),
+		DurationMs: durationMs,
 		Error:      err,
 	})
 	_ = msg.Term()
@@ -617,7 +600,7 @@ func (s *NatsServer) handleTempError(msg jetstream.Msg, err error, durableName s
 	_ = msg.NakWithDelay(time.Duration(natsErrorTimeout) * time.Second)
 }
 
-func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, result string, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
+func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, result string, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time, modelID string, route string, tier int) {
 	result = ai.NormalizeVisionOutput(result, req)
 	logger.Debug("AI_Service", "AI Output for Job %s:\n%s", identity.GetJobId(), result)
 
@@ -627,6 +610,7 @@ func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.M
 		uriStr = "N/A"
 	}
 	step := getStepName(req)
+	durationMs := time.Since(startTime).Milliseconds()
 
 	var outputMap map[string]any
 	if err := json.Unmarshal([]byte(result), &outputMap); err != nil {
@@ -636,6 +620,8 @@ func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.M
 			}
 		} else {
 			errMsg := fmt.Sprintf("[Step: %s, URI: %s] AI returned invalid JSON: %v", step, uriStr, err)
+			s.publishAITaskTraceEvent(ctx, identity, step, "AI_TASK_FAILED", modelID, route, tier, durationMs, 0, 0, 0)
+			s.routeToDLQ(ctx, msg, identity, "INVALID_AI_OUTPUT", fmt.Errorf("%s", errMsg))
 			errReply := s.sendErrorReply(ctx, replySubj, errMsg, "INVALID_AI_OUTPUT")
 			s.logReplyError(errReply)
 			_ = msg.Term()
@@ -646,11 +632,15 @@ func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.M
 	actionResultStruct, err := structpb.NewStruct(outputMap)
 	if err != nil {
 		errMsg := fmt.Sprintf("[Step: %s, URI: %s] Failed to convert AI output to struct: %v", step, uriStr, err)
+		s.publishAITaskTraceEvent(ctx, identity, step, "AI_TASK_FAILED", modelID, route, tier, durationMs, 0, 0, 0)
+		s.routeToDLQ(ctx, msg, identity, "STRUCT_CONVERSION_FAILED", fmt.Errorf("%s", errMsg))
 		errReply := s.sendErrorReply(ctx, replySubj, errMsg, "STRUCT_CONVERSION_FAILED")
 		s.logReplyError(errReply)
 		_ = msg.Term()
 		return
 	}
+
+	s.publishAITaskTraceEvent(ctx, identity, step, "AI_TASK_COMPLETED", modelID, route, tier, durationMs, 0, 0, 0)
 
 	resp := &pb.PerformActionResponse{
 		Success:      true,
@@ -678,7 +668,7 @@ func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.M
 			AppID:      identity.GetAppId(),
 			JobID:      identity.GetJobId(),
 			Attempt:    attempt,
-			DurationMs: time.Since(startTime).Milliseconds(),
+			DurationMs: durationMs,
 			Error:      err,
 		})
 		_ = msg.Term()
@@ -931,4 +921,138 @@ func (s *NatsServer) publishVisionTraceEvent(ctx context.Context, identity *pb.I
 	}
 	_, _ = s.js.Publish(ctx, traceSubj, data)
 }
+
+type AITaskTraceEvent struct {
+	TenantID         string    `json:"tenant_id"`
+	AppID            string    `json:"app_id"`
+	JobID            string    `json:"job_id"`
+	StepID           string    `json:"step_id"`
+	EventType        string    `json:"event_type"`
+	ModelUsed        string    `json:"model_used"`
+	ResolvedRoute    string    `json:"resolved_route"`
+	ResolutionTier   int       `json:"resolution_tier"`
+	DurationMs       int64     `json:"duration_ms"`
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	TotalTokens      int       `json:"total_tokens"`
+	Timestamp        time.Time `json:"timestamp"`
+}
+
+func (s *NatsServer) publishAITaskTraceEvent(ctx context.Context, identity *pb.InfrastructureIdentity, stepId string, eventType string, modelUsed string, resolvedRoute string, tier int, durationMs int64, promptTokens int, completionTokens int, totalTokens int) {
+	if s.js == nil || identity == nil {
+		return
+	}
+	traceSubj := fmt.Sprintf("trace.ai.%s.%s", identity.GetTenantId(), identity.GetAppId())
+	evt := AITaskTraceEvent{
+		TenantID:         identity.GetTenantId(),
+		AppID:            identity.GetAppId(),
+		JobID:            identity.GetJobId(),
+		StepID:           stepId,
+		EventType:        eventType,
+		ModelUsed:        modelUsed,
+		ResolvedRoute:    resolvedRoute,
+		ResolutionTier:   tier,
+		DurationMs:       durationMs,
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      totalTokens,
+		Timestamp:        time.Now().UTC(),
+	}
+	data, err := json.Marshal(evt)
+	if err != nil {
+		logger.Warn("AI_Service", "Failed to marshal AI task trace event: %v", err)
+		return
+	}
+	_, _ = s.js.Publish(ctx, traceSubj, data)
+}
+
+func (s *NatsServer) routeToDLQ(ctx context.Context, msg jetstream.Msg, identity *pb.InfrastructureIdentity, errCode string, err error) {
+	if s.js == nil || identity == nil || err == nil {
+		return
+	}
+	dlqPub := natsutil.NewJetStreamDLQPublisher(s.js, "AI_Service")
+	errContract := &pb.ErrorContract{
+		Code:    errCode,
+		Message: err.Error(),
+	}
+	_ = dlqPub.Publish(ctx, identity, errContract, msg.Subject(), nil)
+}
+
+// ResolveModelRoute resolves model selection in strict 4-tier Client Authority order:
+// Tier 1: Client runtime override (node_config.model_override / dynamic_input.model_override / model_choice)
+// Tier 2: Modality route if is_scanned flag is present (MODEL_ROUTE_VISION / OPENAI_VISION_MODEL vs MODEL_ROUTE_TEXT / OPENAI_TEXT_MODEL)
+// Tier 3: Action route env var (MODEL_ROUTE_<ACTION>)
+// Tier 4: Global default (OPENAI_TEXT_MODEL)
+func (s *NatsServer) ResolveModelRoute(req *pb.ExecuteTaskRequest, taskSubject string) (string, int) {
+	// Tier 1: Client Override (Highest Authority)
+	if overrideModel, ok := extractModelOverride(req); ok && strings.TrimSpace(overrideModel) != "" {
+		return strings.TrimSpace(overrideModel), 1
+	}
+
+	// Modality Route (explicit is_scanned flag in payload)
+	if req != nil && req.Payload != nil {
+		if fields := req.Payload.GetFields(); fields != nil {
+			if _, ok := fields["global_state"]; ok {
+				isScanned, hasFlag, err := extractIsScannedFlag(req)
+				if err == nil && hasFlag {
+					if isScanned {
+						if visionModel := envutil.GetStringOrDefault("MODEL_ROUTE_VISION", envutil.GetStringOrDefault("OPENAI_VISION_MODEL", "")); visionModel != "" {
+							return visionModel, 3
+						}
+					} else {
+						if textModel := envutil.GetStringOrDefault("MODEL_ROUTE_TEXT", envutil.GetStringOrDefault("OPENAI_TEXT_MODEL", "")); textModel != "" {
+							return textModel, 3
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Tier 2 / 3: Action Subject Mapping (MODEL_ROUTE_<ACTION>)
+	taskSubject = strings.TrimSpace(taskSubject)
+	if taskSubject != "" {
+		parts := strings.Split(taskSubject, ".")
+		var trailingToken string
+		for i := len(parts) - 1; i >= 0; i-- {
+			token := strings.TrimSpace(parts[i])
+			if token != "" {
+				trailingToken = token
+				break
+			}
+		}
+		if trailingToken != "" {
+			sanitized := nonAlphanumericRegex.ReplaceAllString(trailingToken, "_")
+			upperToken := strings.ToUpper(sanitized)
+			upperToken = strings.TrimPrefix(upperToken, "WORKER_AI_")
+			upperToken = strings.TrimPrefix(upperToken, "WORKER_")
+
+			if upperToken == "EMBEDDING" || upperToken == "EMBED" {
+				if embModel := envutil.MustGetEmbeddingModel(); embModel != "" {
+					return embModel, 2
+				}
+			}
+
+			envKey := fmt.Sprintf("MODEL_ROUTE_%s", upperToken)
+			if actionModel := envutil.GetStringOrDefault(envKey, ""); actionModel != "" {
+				return actionModel, 2
+			}
+		}
+	}
+
+	// Tier 4: Provider Default Text Model
+	if defaultModel := envutil.GetStringOrDefault("OPENAI_TEXT_MODEL", ""); defaultModel != "" {
+		return defaultModel, 4
+	}
+
+	// If subject was provided and resolveModelID works, try it
+	if taskSubject != "" {
+		if model, err := s.resolveModelID(taskSubject); err == nil && model != "" {
+			return model, 2
+		}
+	}
+
+	panic("action failed: unable to resolve model ID across all 4 tiers")
+}
+
 
