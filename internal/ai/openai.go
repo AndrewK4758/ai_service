@@ -365,33 +365,5 @@ func extractSchemaMap(req *pb.ExecuteTaskRequest) map[string]any {
 }
 
 func enforceDeterministicValidation(responseStr string, req *pb.ExecuteTaskRequest) string {
-	schemaObj := extractSchemaMap(req)
-
-	props, ok := schemaObj["properties"].(map[string]any)
-	if !ok {
-		return responseStr
-	}
-
-	var respObj map[string]any
-	if err := json.Unmarshal([]byte(responseStr), &respObj); err != nil {
-		return responseStr
-	}
-
-	sanitizedObj := make(map[string]any)
-	for k := range props {
-		val, exists := respObj[k]
-		if !exists {
-			sanitizedObj[k] = nil
-		} else if strVal, ok := val.(string); ok && strVal == "null" {
-			sanitizedObj[k] = nil
-		} else {
-			sanitizedObj[k] = val
-		}
-	}
-
-	resBytes, err := json.Marshal(sanitizedObj)
-	if err != nil {
-		return responseStr
-	}
-	return string(resBytes)
+	return NormalizeVisionOutput(responseStr, req)
 }

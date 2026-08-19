@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sync"
@@ -520,3 +521,150 @@ func TestNatsServer_handleMessage_PoisonPillPanic_NakWithDelay(t *testing.T) {
 		t.Errorf("expected NakWithDelay to be 10s, got %v", msg.nakDelay)
 	}
 }
+
+type capturingJS struct {
+	jetstream.JetStream
+	mu        sync.Mutex
+	published []struct {
+		Subject string
+		Data    []byte
+	}
+}
+
+func (c *capturingJS) Publish(ctx context.Context, subj string, data []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.published = append(c.published, struct {
+		Subject string
+		Data    []byte
+	}{Subject: subj, Data: data})
+	return &jetstream.PubAck{}, nil
+}
+
+func TestNatsServer_VisionProgressTelemetry(t *testing.T) {
+	t.Setenv("MODEL_ROUTE_VISION", "glm-ocr")
+	js := &capturingJS{}
+	analyzer := &trackingAnalyzer{}
+	storage := &mockStorageManager{
+		fileBytes: []byte("fake_png_data"),
+	}
+	server := NewNatsServer(nil, js, analyzer, storage, 1, "test", 1, 1, 8192)
+
+	schema, _ := structpb.NewStruct(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"result": map[string]any{"type": "string"},
+		},
+	})
+
+	payload, _ := structpb.NewStruct(map[string]any{
+		"node_config": map[string]any{
+			"expected_schema_struct": schema.AsMap(),
+		},
+		"storage": map[string]any{
+			"document_uri": "internal-store://t1/a1/j1/page.png",
+		},
+		"global_state": map[string]any{
+			"functional": map[string]any{},
+		},
+	})
+
+	req := &pb.ExecuteTaskRequest{
+		Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+		TaskSubject: "worker.ai.vision",
+		StepId:      "STEP_VISION_TABLE",
+		Payload:     payload,
+	}
+	data, _ := proto.Marshal(req)
+
+	msg := &mockMsg{
+		data: data,
+		headers: nats.Header{
+			"Reply-Subject": []string{"reply.to.client"},
+		},
+		metadata: &jetstream.MsgMetadata{NumDelivered: 1},
+	}
+
+	server.processMessage(context.Background(), msg)
+
+	if !analyzer.visionCalled {
+		t.Errorf("expected vision analyzer to be called")
+	}
+
+	js.mu.Lock()
+	defer js.mu.Unlock()
+
+	foundStarted := false
+	foundCompleted := false
+	for _, p := range js.published {
+		if p.Subject == "trace.ai.t1.a1" {
+			var evt VisionTraceEvent
+			if err := json.Unmarshal(p.Data, &evt); err == nil {
+				if evt.EventType == "VISION_PAGE_STARTED" {
+					foundStarted = true
+					if evt.CurrentPage != 1 || evt.TotalPages != 1 || evt.StepID != "STEP_VISION_TABLE" {
+						t.Errorf("unexpected started event: %+v", evt)
+					}
+				}
+				if evt.EventType == "VISION_PAGE_COMPLETED" {
+					foundCompleted = true
+					if evt.CurrentPage != 1 || evt.TotalPages != 1 || evt.StepID != "STEP_VISION_TABLE" {
+						t.Errorf("unexpected completed event: %+v", evt)
+					}
+				}
+			}
+		}
+	}
+
+	if !foundStarted {
+		t.Errorf("expected VISION_PAGE_STARTED telemetry event to be published")
+	}
+	if !foundCompleted {
+		t.Errorf("expected VISION_PAGE_COMPLETED telemetry event to be published")
+	}
+}
+
+func TestNatsServer_DynamicModelOverride(t *testing.T) {
+	js := &capturingJS{}
+	analyzer := &trackingAnalyzer{}
+	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1, 8192)
+
+	schema, _ := structpb.NewStruct(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"result": map[string]any{"type": "string"},
+		},
+	})
+
+	payload, _ := structpb.NewStruct(map[string]any{
+		"node_config": map[string]any{
+			"expected_schema_struct": schema.AsMap(),
+			"model_override":        "custom-vision-model-v2",
+		},
+		"global_state": map[string]any{
+			"functional": map[string]any{},
+		},
+	})
+
+	req := &pb.ExecuteTaskRequest{
+		Identity:    &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
+		TaskSubject: "worker.ai.vision",
+		Payload:     payload,
+	}
+	data, _ := proto.Marshal(req)
+
+	msg := &mockMsg{
+		data: data,
+		headers: nats.Header{
+			"Reply-Subject": []string{"reply.to.client"},
+		},
+		metadata: &jetstream.MsgMetadata{NumDelivered: 1},
+	}
+
+	server.processMessage(context.Background(), msg)
+
+	if analyzer.lastModelID != "custom-vision-model-v2" {
+		t.Errorf("expected model override custom-vision-model-v2, got %q", analyzer.lastModelID)
+	}
+}
+

@@ -24,7 +24,6 @@ import (
 	"ai_service/internal/storage"
 
 	"github.com/AndrewK4758/shared_utils/identityparser"
-	"github.com/AndrewK4758/shared_utils/jsonclean"
 	"github.com/AndrewK4758/shared_utils/logger"
 	"github.com/AndrewK4758/shared_utils/natsutil"
 	"github.com/AndrewK4758/shared_utils/workflowparser"
@@ -240,21 +239,25 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	targetSubjStr := req.GetTaskSubject()
 
-	isScanned, hasFlag, err := extractIsScannedFlag(req)
-	if err != nil {
-		panic(fmt.Errorf("failed to extract is_scanned flag: %w", err))
-	}
 	var modelID string
-	if hasFlag {
-		if isScanned {
-			modelID = envutil.MustGetString("OPENAI_VISION_MODEL")
-		} else {
-			modelID = envutil.MustGetString("OPENAI_TEXT_MODEL")
-		}
+	if overrideModel, ok := extractModelOverride(req); ok && overrideModel != "" {
+		modelID = overrideModel
 	} else {
-		modelID, err = s.resolveModelID(targetSubjStr)
+		isScanned, hasFlag, err := extractIsScannedFlag(req)
 		if err != nil {
-			panic(fmt.Errorf("failed to resolve model ID: %w", err))
+			panic(fmt.Errorf("failed to extract is_scanned flag: %w", err))
+		}
+		if hasFlag {
+			if isScanned {
+				modelID = envutil.MustGetString("OPENAI_VISION_MODEL")
+			} else {
+				modelID = envutil.MustGetString("OPENAI_TEXT_MODEL")
+			}
+		} else {
+			modelID, err = s.resolveModelID(targetSubjStr)
+			if err != nil {
+				panic(fmt.Errorf("failed to resolve model ID: %w", err))
+			}
 		}
 	}
 
@@ -445,13 +448,30 @@ func (s *NatsServer) processPdfVisionBytes(ctx context.Context, fileBytes []byte
 	if err != nil {
 		return "", "AI_PROCESSING_FAILED", fmt.Errorf("[Step: %s, URI: %s] pdftoppm failed: %w", step, docUri, err)
 	}
-	return s.analyzeImageWithTokenCheck(ctx, images, step, docUri, req, modelID)
+	totalPages := len(images)
+	startTime := time.Now()
+	s.publishVisionTraceEvent(ctx, req.GetIdentity(), step, "VISION_PAGE_STARTED", 1, totalPages, 0)
+
+	res, errCode, err := s.analyzeImageWithTokenCheck(ctx, images, step, docUri, req, modelID)
+	if err != nil {
+		return res, errCode, err
+	}
+	s.publishVisionTraceEvent(ctx, req.GetIdentity(), step, "VISION_PAGE_COMPLETED", totalPages, totalPages, time.Since(startTime).Milliseconds())
+	return res, "", nil
 }
 
 func (s *NatsServer) processRawImageBytes(ctx context.Context, fileBytes []byte, step string, docUri string, req *pb.ExecuteTaskRequest, modelID string) (string, string, error) {
 	images := [][]byte{fileBytes}
 	fileBytes = nil
-	return s.analyzeImageWithTokenCheck(ctx, images, step, docUri, req, modelID)
+	startTime := time.Now()
+	s.publishVisionTraceEvent(ctx, req.GetIdentity(), step, "VISION_PAGE_STARTED", 1, 1, 0)
+
+	res, errCode, err := s.analyzeImageWithTokenCheck(ctx, images, step, docUri, req, modelID)
+	if err != nil {
+		return res, errCode, err
+	}
+	s.publishVisionTraceEvent(ctx, req.GetIdentity(), step, "VISION_PAGE_COMPLETED", 1, 1, time.Since(startTime).Milliseconds())
+	return res, "", nil
 }
 
 func (s *NatsServer) processPdfTextBytes(ctx context.Context, fileBytes []byte, step string, docUri string, req *pb.ExecuteTaskRequest, modelID string) (string, string, error) {
@@ -598,7 +618,7 @@ func (s *NatsServer) handleTempError(msg jetstream.Msg, err error, durableName s
 }
 
 func (s *NatsServer) handleExecutionSuccess(ctx context.Context, msg jetstream.Msg, replySubj string, req *pb.ExecuteTaskRequest, result string, durableName string, identity *pb.InfrastructureIdentity, attempt uint64, startTime time.Time) {
-	result = jsonclean.CleanJSON(result)
+	result = ai.NormalizeVisionOutput(result, req)
 	logger.Debug("AI_Service", "AI Output for Job %s:\n%s", identity.GetJobId(), result)
 
 	docUri, _ := getDocumentUri(req)
@@ -851,3 +871,64 @@ func getDocumentUri(req *pb.ExecuteTaskRequest) (string, error) {
 
 	return "", nil
 }
+
+func extractModelOverride(req *pb.ExecuteTaskRequest) (string, bool) {
+	if req == nil || req.Payload == nil {
+		return "", false
+	}
+	if fields := req.Payload.GetFields(); fields != nil {
+		if ncVal, ok := fields["node_config"]; ok && ncVal.GetStructValue() != nil {
+			ncFields := ncVal.GetStructValue().GetFields()
+			if mVal, ok := ncFields["model_override"]; ok && mVal.GetStringValue() != "" {
+				return mVal.GetStringValue(), true
+			}
+			if mVal, ok := ncFields["model_choice"]; ok && mVal.GetStringValue() != "" {
+				return mVal.GetStringValue(), true
+			}
+		}
+		if dynVal, ok := fields["dynamic_input"]; ok && dynVal.GetStructValue() != nil {
+			dynFields := dynVal.GetStructValue().GetFields()
+			if mVal, ok := dynFields["model_override"]; ok && mVal.GetStringValue() != "" {
+				return mVal.GetStringValue(), true
+			}
+		}
+	}
+	return "", false
+}
+
+type VisionTraceEvent struct {
+	TenantID    string    `json:"tenant_id"`
+	AppID       string    `json:"app_id"`
+	JobID       string    `json:"job_id"`
+	StepID      string    `json:"step_id"`
+	EventType   string    `json:"event_type"`
+	CurrentPage int       `json:"current_page"`
+	TotalPages  int       `json:"total_pages"`
+	DurationMs  int64     `json:"duration_ms"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+func (s *NatsServer) publishVisionTraceEvent(ctx context.Context, identity *pb.InfrastructureIdentity, stepId string, eventType string, currentPage int, totalPages int, durationMs int64) {
+	if s.js == nil || identity == nil {
+		return
+	}
+	traceSubj := fmt.Sprintf("trace.ai.%s.%s", identity.GetTenantId(), identity.GetAppId())
+	evt := VisionTraceEvent{
+		TenantID:    identity.GetTenantId(),
+		AppID:       identity.GetAppId(),
+		JobID:       identity.GetJobId(),
+		StepID:      stepId,
+		EventType:   eventType,
+		CurrentPage: currentPage,
+		TotalPages:  totalPages,
+		DurationMs:  durationMs,
+		Timestamp:   time.Now().UTC(),
+	}
+	data, err := json.Marshal(evt)
+	if err != nil {
+		logger.Warn("AI_Service", "Failed to marshal vision trace event: %v", err)
+		return
+	}
+	_, _ = s.js.Publish(ctx, traceSubj, data)
+}
+
