@@ -77,6 +77,15 @@ func (c *resiliencyCapturingJS) Publish(ctx context.Context, subj string, data [
 	return &jetstream.PubAck{}, nil
 }
 
+func (c *resiliencyCapturingJS) PublishMsg(ctx context.Context, msg *nats.Msg, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if msg != nil {
+		c.lastPublishedData = msg.Data
+	}
+	return &jetstream.PubAck{}, nil
+}
+
 // TestResiliency_NatsServer_JITMemoryDiscarding verifies that JIT fetch successfully processes doc bytes.
 func TestResiliency_NatsServer_JITMemoryDiscarding(t *testing.T) {
 	js := &resiliencyCapturingJS{}

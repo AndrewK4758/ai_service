@@ -108,12 +108,19 @@ type openAIRequest struct {
 	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
 }
 
+type TokenUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 type openAIResponse struct {
 	Choices []struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
+	Usage TokenUsage `json:"usage"`
 }
 
 func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest, baseURLOverride ...string) (string, error) {
