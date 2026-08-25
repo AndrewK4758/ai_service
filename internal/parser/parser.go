@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+
+	"github.com/AndrewK4758/shared_utils/jsonclean"
 )
 
 // ExtractPdfText uses poppler-utils (pdftotext) for extremely robust extraction
@@ -28,7 +30,7 @@ func ExtractPdfText(fileBytes []byte) (string, error) {
 		return "", fmt.Errorf("pdftotext failed: %w, stderr: %s", err, errBuf.String())
 	}
 
-	return outBuf.String(), nil
+	return jsonclean.SanitizeString(outBuf.String()), nil
 }
 
 // docxDocument represents the internal word/document.xml structure
@@ -83,5 +85,5 @@ func ExtractDocxText(fileBytes []byte) (string, error) {
 		buf.WriteString("\n")
 	}
 
-	return buf.String(), nil
+	return jsonclean.SanitizeString(buf.String()), nil
 }

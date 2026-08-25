@@ -1,8 +1,9 @@
 package ai
 
 import (
-	"fmt"
-	"github.com/AndrewK4758/shared_utils/envutil"
+    "fmt"
+
+    "github.com/AndrewK4758/shared_utils/envutil"
 )
 
 func NewAnalyzerFactory(config OpenAIConfig) (Analyzer, error) {

@@ -18,10 +18,10 @@ func TestResiliency_RetryCountAndSleepVerification(t *testing.T) {
 	t.Setenv("STORAGE_FETCH_RETRY_COUNT", "3")
 	t.Setenv("STORAGE_FETCH_RETRY_SLEEP_MS", "10")
 
-	var callCount int64
+	var callCount atomic.Int64
 	client := &mockMultiAttemptGatewayClient{
 		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
-			atomic.AddInt64(&callCount, 1)
+			callCount.Add(1)
 			return nil, fmt.Errorf("simulated storage failure attempt %d", call)
 		},
 	}
@@ -35,7 +35,7 @@ func TestResiliency_RetryCountAndSleepVerification(t *testing.T) {
 		t.Fatalf("expected error after exhausted retries, got nil")
 	}
 
-	finalCalls := atomic.LoadInt64(&callCount)
+	finalCalls := callCount.Load()
 	if finalCalls != 4 { // 1 initial + 3 retries = 4
 		t.Errorf("expected 4 total attempts for retryCount=3, got %d", finalCalls)
 	}
@@ -48,10 +48,10 @@ func TestResiliency_RetryCountAndSleepVerification(t *testing.T) {
 
 // TestResiliency_ImmediateContextTimeout verifies FetchFile fails immediately when context is pre-cancelled.
 func TestResiliency_ImmediateContextTimeout(t *testing.T) {
-	var callCount int64
+	var callCount atomic.Int64
 	client := &mockMultiAttemptGatewayClient{
 		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
-			atomic.AddInt64(&callCount, 1)
+			callCount.Add(1)
 			return nil, nil
 		},
 	}
@@ -64,8 +64,8 @@ func TestResiliency_ImmediateContextTimeout(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
-	if atomic.LoadInt64(&callCount) != 0 {
-		t.Errorf("expected 0 RPC calls when context is pre-canceled, got %d", atomic.LoadInt64(&callCount))
+	if callCount.Load() != 0 {
+		t.Errorf("expected 0 RPC calls when context is pre-canceled, got %d", callCount.Load())
 	}
 }
 
@@ -150,7 +150,7 @@ func TestResiliency_HighConcurrencyRaceDetector(t *testing.T) {
 	concurrency := 100
 	done := make(chan error, concurrency)
 
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		go func(id int) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -168,7 +168,7 @@ func TestResiliency_HighConcurrencyRaceDetector(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		if err := <-done; err != nil {
 			t.Errorf("High concurrency fetch %d failed: %v", i, err)
 		}

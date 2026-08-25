@@ -289,6 +289,6 @@ func (a *AnthropicAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byt
 	return resp, nil
 }
 
-func (a *AnthropicAnalyzer) GenerateEmbedding(ctx context.Context, text string, modelID string) ([]float32, error) {
+func (a *AnthropicAnalyzer) GenerateEmbedding(context.Context, string, string) ([]float32, error) {
 	return nil, fmt.Errorf("GenerateEmbedding not implemented for Anthropic")
 }

@@ -55,7 +55,7 @@ func (v *VertexAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.E
 	model := v.client.GenerativeModel(m)
 	model.SetTemperature(v.temperature)
 	if v.maxTokens > 0 {
-		model.SetMaxOutputTokens(int32(v.maxTokens))
+		model.SetMaxOutputTokens(v.maxTokens)
 	}
 	model.ResponseMIMEType = "application/json"
 
@@ -92,7 +92,7 @@ func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 	model := v.client.GenerativeModel(m)
 	model.SetTemperature(v.temperature)
 	if v.maxTokens > 0 {
-		model.SetMaxOutputTokens(int32(v.maxTokens))
+		model.SetMaxOutputTokens(v.maxTokens)
 	}
 	model.ResponseMIMEType = "application/json"
 

@@ -70,10 +70,10 @@ func (s *slowChunkStream) Recv() (*pb.DownloadResponse, error) {
 
 // TestChallenger_FetchFile_RetryExhaustion_DetailedError checks that after N retries, the returned error wraps the last error properly.
 func TestChallenger_FetchFile_RetryExhaustion_DetailedError(t *testing.T) {
-	var attempts int32
+	var attempts atomic.Int32
 	client := &mockMultiAttemptGatewayClient{
 		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
-			atomic.AddInt32(&attempts, 1)
+			attempts.Add(1)
 			return nil, fmt.Errorf("rpc failure attempt %d", call)
 		},
 	}
@@ -85,7 +85,7 @@ func TestChallenger_FetchFile_RetryExhaustion_DetailedError(t *testing.T) {
 		t.Fatalf("expected error after retry exhaustion, got nil")
 	}
 
-	total := atomic.LoadInt32(&attempts)
+	total := attempts.Load()
 	if total != 4 {
 		t.Errorf("expected 4 total attempts (1 initial + 3 retries), got %d", total)
 	}
@@ -94,7 +94,7 @@ func TestChallenger_FetchFile_RetryExhaustion_DetailedError(t *testing.T) {
 	if !testing.Short() && err.Error() == "" {
 		t.Errorf("empty error string returned")
 	}
-	if err != nil && len(err.Error()) == 0 {
+	if len(err.Error()) == 0 {
 		t.Errorf("empty error")
 	}
 	_ = expectedSubstr
@@ -102,10 +102,10 @@ func TestChallenger_FetchFile_RetryExhaustion_DetailedError(t *testing.T) {
 
 // TestChallenger_FetchFile_HighConcurrencyStress 200 concurrent requests stress test
 func TestChallenger_FetchFile_HighConcurrencyStress(t *testing.T) {
-	var totalRPCs int64
+	var totalRPCs atomic.Int64
 	client := &mockMultiAttemptGatewayClient{
 		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
-			atomic.AddInt64(&totalRPCs, 1)
+			totalRPCs.Add(1)
 			return &mockDownloadStream{
 				responses: []*pb.DownloadResponse{
 					{ChunkData: []byte("stress_test_chunk_data")},
@@ -120,7 +120,7 @@ func TestChallenger_FetchFile_HighConcurrencyStress(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, concurrency)
 
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -146,7 +146,7 @@ func TestChallenger_FetchFile_HighConcurrencyStress(t *testing.T) {
 		t.Errorf("Stress test failure: %v", err)
 	}
 
-	calls := atomic.LoadInt64(&totalRPCs)
+	calls := totalRPCs.Load()
 	if calls != int64(concurrency) {
 		t.Errorf("expected %d total RPC calls, got %d", concurrency, calls)
 	}

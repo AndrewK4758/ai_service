@@ -146,7 +146,7 @@ func TestChallengerM4I2_ConcurrentStressAndRaceSafety(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(concurrency)
 
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		go func(id int) {
 			defer wg.Done()
 

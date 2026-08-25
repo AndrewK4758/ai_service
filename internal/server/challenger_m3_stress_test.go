@@ -30,7 +30,7 @@ func newModelTrackingAnalyzer() *modelTrackingAnalyzer {
 	}
 }
 
-func (m *modelTrackingAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+func (m *modelTrackingAnalyzer) recordCall(workflowCtx *pb.ExecuteTaskRequest, modelID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -48,34 +48,40 @@ func (m *modelTrackingAnalyzer) AnalyzeText(ctx context.Context, text string, wo
 	case "default-llm-test":
 		atomic.AddInt64(&m.defaultCalls, 1)
 	}
+}
 
+func (m *modelTrackingAnalyzer) AnalyzeText(ctx context.Context, text string, workflowCtx *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
+	m.recordCall(workflowCtx, modelID)
 	return `{"status":"processed","model":"` + modelID + `"}`, nil
 }
 
 func (m *modelTrackingAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, workflowCtx *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	jobID := "unknown"
-	if workflowCtx != nil && workflowCtx.Identity != nil {
-		jobID = workflowCtx.Identity.JobId
-	}
-	m.lastModelByJob[jobID] = modelID
-
-	switch modelID {
-	case "gpt-4o-vision-test":
-		atomic.AddInt64(&m.visionCalls, 1)
-	case "gemma4-extended-test":
-		atomic.AddInt64(&m.textCalls, 1)
-	case "default-llm-test":
-		atomic.AddInt64(&m.defaultCalls, 1)
-	}
-
+	m.recordCall(workflowCtx, modelID)
 	return `{"status":"processed_vision","model":"` + modelID + `"}`, nil
 }
 
 func (m *modelTrackingAnalyzer) GenerateEmbedding(ctx context.Context, text string, modelID string) ([]float32, error) {
 	return []float32{0.5, 0.5}, nil
+}
+
+func buildTestPayload(nodeConfig, funcState, storage map[string]any) *structpb.Struct {
+	if nodeConfig == nil {
+		nodeConfig = map[string]any{}
+	}
+	if funcState == nil {
+		funcState = map[string]any{}
+	}
+	payloadMap := map[string]any{
+		"node_config": nodeConfig,
+		"global_state": map[string]any{
+			"functional": funcState,
+		},
+	}
+	if storage != nil {
+		payloadMap["storage"] = storage
+	}
+	st, _ := structpb.NewStruct(payloadMap)
+	return st
 }
 
 // TestChallenger_DynamicModelRouting_RaceAndConcurrency tests dynamic model routing under race conditions with 300 concurrent requests.
@@ -96,7 +102,7 @@ func TestChallenger_DynamicModelRouting_RaceAndConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(concurrency)
 
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		go func(id int) {
 			defer wg.Done()
 
@@ -206,25 +212,7 @@ func TestChallenger_DynamicModelRouting_EdgeCaseFlags(t *testing.T) {
 			store := &workingStore{data: []byte("test doc payload")}
 			server := NewNatsServer(nil, js, analyzer, store, 1, "test", 1, 1, 8192)
 
-			globalState := map[string]any{
-				"functional": map[string]any{},
-			}
-			if tc.funcState != nil {
-				for k, v := range tc.funcState {
-					globalState["functional"].(map[string]any)[k] = v
-				}
-			}
-
-			payloadMap := map[string]any{
-				"global_state": globalState,
-			}
-			if tc.nodeConfig != nil {
-				payloadMap["node_config"] = tc.nodeConfig
-			} else {
-				payloadMap["node_config"] = map[string]any{}
-			}
-
-			st, _ := structpb.NewStruct(payloadMap)
+			st := buildTestPayload(tc.nodeConfig, tc.funcState, nil)
 
 			req := &pb.ExecuteTaskRequest{
 				StepId:      "STEP_EDGE",

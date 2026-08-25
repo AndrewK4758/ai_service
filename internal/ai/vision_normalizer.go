@@ -70,7 +70,7 @@ func extractSchemaMapSafely(req *pb.ExecuteTaskRequest) (schema map[string]any) 
 
 func normalizeBySchema(val any, schema map[string]any) any {
 	if schema == nil {
-		return normalizeScalar(val, "")
+		return normalizeScalar(val)
 	}
 
 	schemaType, _ := schema["type"].(string)
@@ -101,7 +101,7 @@ func normalizeObject(val any, schema map[string]any) any {
 	if props == nil {
 		res := make(map[string]any, len(objMap))
 		for k, v := range objMap {
-			res[k] = normalizeScalar(v, "")
+			res[k] = normalizeScalar(v)
 		}
 		return res
 	}
@@ -195,10 +195,10 @@ func normalizeGeneric(val any, schema map[string]any) any {
 	if items, ok := schema["items"].(map[string]any); ok && items != nil {
 		return normalizeArray(val, schema)
 	}
-	return normalizeScalar(val, "")
+	return normalizeScalar(val)
 }
 
-func normalizeScalar(val any, targetType string) any {
+func normalizeScalar(val any) any {
 	if val == nil {
 		return nil
 	}
@@ -211,14 +211,14 @@ func normalizeScalar(val any, targetType string) any {
 	if obj, ok := val.(map[string]any); ok {
 		res := make(map[string]any, len(obj))
 		for k, v := range obj {
-			res[k] = normalizeScalar(v, "")
+			res[k] = normalizeScalar(v)
 		}
 		return res
 	}
 	if arr, ok := val.([]any); ok {
 		res := make([]any, len(arr))
 		for i, v := range arr {
-			res[i] = normalizeScalar(v, "")
+			res[i] = normalizeScalar(v)
 		}
 		return res
 	}

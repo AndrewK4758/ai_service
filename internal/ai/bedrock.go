@@ -96,23 +96,7 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.
 		return "", fmt.Errorf("bedrock inference failed: %w", err)
 	}
 
-	if respBytes, err := json.Marshal(resp); err == nil {
-		logger.Debug("AI_Service", "[Ai Service] Bedrock Raw Response Output: %s", string(respBytes))
-	}
-
-	msg, ok := resp.Output.(*types.ConverseOutputMemberMessage)
-	if !ok {
-		return "", fmt.Errorf("bedrock returned unexpected output type")
-	}
-	if len(msg.Value.Content) == 0 {
-		return "", fmt.Errorf("bedrock returned empty content")
-	}
-	txt, ok := msg.Value.Content[0].(*types.ContentBlockMemberText)
-	if !ok {
-		return "", fmt.Errorf("bedrock returned non-text content")
-	}
-
-	return jsonclean.CleanJSON(txt.Value), nil
+	return extractBedrockResponse(resp)
 }
 
 func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
@@ -169,6 +153,14 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 		return "", fmt.Errorf("bedrock vision inference failed: %w", err)
 	}
 
+	return extractBedrockResponse(resp)
+}
+
+func (b *BedrockAnalyzer) GenerateEmbedding(context.Context, string, string) ([]float32, error) {
+	return nil, fmt.Errorf("GenerateEmbedding not implemented for Bedrock")
+}
+
+func extractBedrockResponse(resp *bedrockruntime.ConverseOutput) (string, error) {
 	if respBytes, err := json.Marshal(resp); err == nil {
 		logger.Debug("AI_Service", "[Ai Service] Bedrock Raw Response Output: %s", string(respBytes))
 	}
@@ -186,8 +178,4 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 	}
 
 	return jsonclean.CleanJSON(txt.Value), nil
-}
-
-func (b *BedrockAnalyzer) GenerateEmbedding(ctx context.Context, text string, modelID string) ([]float32, error) {
-	return nil, fmt.Errorf("GenerateEmbedding not implemented for Bedrock")
 }

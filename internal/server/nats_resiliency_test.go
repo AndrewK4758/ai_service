@@ -151,7 +151,7 @@ func TestResiliency_NatsServer_HighConcurrencyStress(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(concurrency)
 
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		go func(id int) {
 			defer wg.Done()
 			st, _ := structpb.NewStruct(map[string]any{

@@ -194,7 +194,7 @@ func TestAdversarial_AIService_JITByteDiscardAndMemoryAudit(t *testing.T) {
 	runtime.ReadMemStats(&mBefore)
 
 	// Run 20 sequential JIT fetches of 5MB files
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		payload, _ := structpb.NewStruct(map[string]any{
 			"node_config": map[string]any{},
 			"global_state": map[string]any{
@@ -250,7 +250,7 @@ func TestAdversarial_AIService_HighConcurrencyStress(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(concurrency)
 
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		go func(id int) {
 			defer wg.Done()
 

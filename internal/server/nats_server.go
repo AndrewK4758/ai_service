@@ -1,34 +1,35 @@
 package server
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
-	"time"
+    "context"
+    "encoding/json"
+    "fmt"
+    "io"
+    "path/filepath"
+    "regexp"
+    "slices"
+    "strconv"
+    "strings"
+    "time"
 
-	"github.com/AndrewK4758/shared_utils/envutil"
+    "github.com/AndrewK4758/shared_utils/envutil"
 
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
+    "github.com/nats-io/nats.go"
+    "github.com/nats-io/nats.go/jetstream"
+    "google.golang.org/protobuf/encoding/protojson"
+    "google.golang.org/protobuf/proto"
+    "google.golang.org/protobuf/types/known/structpb"
 
-	"ai_service/internal/ai"
-	docparser "ai_service/internal/parser"
-	"ai_service/internal/storage"
+    "ai_service/internal/ai"
+    docparser "ai_service/internal/parser"
+    "ai_service/internal/storage"
 
-	"github.com/AndrewK4758/shared_utils/identityparser"
-	"github.com/AndrewK4758/shared_utils/logger"
-	"github.com/AndrewK4758/shared_utils/natsutil"
-	"github.com/AndrewK4758/shared_utils/workflowparser"
+    "github.com/AndrewK4758/shared_utils/identityparser"
+    "github.com/AndrewK4758/shared_utils/logger"
+    "github.com/AndrewK4758/shared_utils/natsutil"
+    "github.com/AndrewK4758/shared_utils/workflowparser"
 
-	pb "github.com/AndrewK4758/shared_protos"
+    pb "github.com/AndrewK4758/shared_protos"
 )
 
 type NatsServer struct {
@@ -73,7 +74,7 @@ func (s *NatsServer) Start(ctx context.Context) error {
 	durableName := envutil.GetStringOrDefault("NATS_CONSUMER_NAME", "ai_service_workers_all")
 	var filterSubjects []string
 	if s.queueFilter == ">" {
-		filterSubjects = []string{"worker.ai.>", "ai.action.>"}
+		filterSubjects = []string{"worker.ai.>"}
 	} else {
 		filterSubjects = strings.Split(s.queueFilter, ",")
 		for i := range filterSubjects {
@@ -323,7 +324,7 @@ func (s *NatsServer) executeAction(ctx context.Context, req *pb.ExecuteTaskReque
 		return s.handleMPL327MetaCompiler(ctx, req)
 	}
 	if strings.Contains(lowerSubj, "residual_sweep") {
-		return s.handleMPL327ResidualSweep(ctx, req)
+		return s.handleMPL327ResidualSweep(req)
 	}
 	docUri, err := getDocumentUri(req)
 	if err != nil {
@@ -597,7 +598,7 @@ func toFloat64(v any) (float64, bool) {
 	}
 	return 0, false
 }
-func (s *NatsServer) handleMPL327ResidualSweep(ctx context.Context, req *pb.ExecuteTaskRequest) (string, string, error) {
+func (s *NatsServer) handleMPL327ResidualSweep(req *pb.ExecuteTaskRequest) (string, string, error) {
     parser := workflowparser.NewTaskRequestParser(req)
     gs, err := parser.GetGlobalState()
     if err != nil {
@@ -625,8 +626,8 @@ func (s *NatsServer) handleMPL327ResidualSweep(ctx context.Context, req *pb.Exec
         return "", "IMPOSSIBLE_STATE", fmt.Errorf("[SEAM: IMPOSSIBLE_STATE] PassCount %d <1 for Job %s", passCount, req.Identity.JobId)
     }
     // Count residuals by scanning re-extracted text (from payload or functional)
+    var residualSamples []string
     residualCount := 0
-    residualSamples := []string{}
     // Try to get re-extracted text from functional
     textToScan := ""
     for _, k := range []string{"extracted_text", "redacted_text", "residual_text", "DocumentText"} {
@@ -689,12 +690,12 @@ func (s *NatsServer) handleMPL327ResidualSweep(ctx context.Context, req *pb.Exec
     return string(b), "", nil
 }
 
-func min(a, b int) int { if a < b { return a }; return b }
+
 
 func isVisionRequest(targetSubj string, modelID string, ext string) bool {
 	subjLower := strings.ToLower(targetSubj)
 	visionSubjects := envutil.GetStringOrDefault("VISION_SUBJECTS", "vision,ocr,image")
-	for _, v := range strings.Split(visionSubjects, ",") {
+	for v := range strings.SplitSeq(visionSubjects, ",") {
 		if strings.Contains(subjLower, strings.TrimSpace(v)) {
 			return true
 		}
@@ -702,7 +703,7 @@ func isVisionRequest(targetSubj string, modelID string, ext string) bool {
 
 	modelLower := strings.ToLower(modelID)
 	visionModels := envutil.GetStringOrDefault("VISION_MODELS", "vision,gpt-4o,claude-3")
-	for _, m := range strings.Split(visionModels, ",") {
+	for m := range strings.SplitSeq(visionModels, ",") {
 		if strings.Contains(modelLower, strings.TrimSpace(m)) {
 			return true
 		}
@@ -997,8 +998,8 @@ func (s *NatsServer) resolveModelID(subject string) (string, error) {
 
 	parts := strings.Split(subject, ".")
 	var trailingToken string
-	for i := len(parts) - 1; i >= 0; i-- {
-		token := strings.TrimSpace(parts[i])
+	for _, part := range slices.Backward(parts) {
+		token := strings.TrimSpace(part)
 		if token != "" {
 			trailingToken = token
 			break
@@ -1252,8 +1253,8 @@ func (s *NatsServer) ResolveModelRoute(req *pb.ExecuteTaskRequest, taskSubject s
 	if taskSubject != "" {
 		parts := strings.Split(taskSubject, ".")
 		var trailingToken string
-		for i := len(parts) - 1; i >= 0; i-- {
-			token := strings.TrimSpace(parts[i])
+		for _, part := range slices.Backward(parts) {
+			token := strings.TrimSpace(part)
 			if token != "" {
 				trailingToken = token
 				break

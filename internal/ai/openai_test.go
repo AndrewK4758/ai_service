@@ -90,13 +90,13 @@ func TestOpenAIAnalyzer_AnalyzeText(t *testing.T) {
 			ctx := context.Background()
 			action := &pb.ActionDefinition{Name: "test"}
 			
-			mockSchema, _ := structpb.NewStruct(map[string]interface{}{"properties": map[string]interface{}{"foo": map[string]interface{}{}}})
-			payloadStruct, _ := structpb.NewStruct(map[string]interface{}{
-				"node_config": map[string]interface{}{
+			mockSchema, _ := structpb.NewStruct(map[string]any{"properties": map[string]any{"foo": map[string]any{}}})
+			payloadStruct, _ := structpb.NewStruct(map[string]any{
+				"node_config": map[string]any{
 					"expected_schema_struct": mockSchema.AsMap(),
 				},
-				"global_state": map[string]interface{}{},
-				"dynamic_input": map[string]interface{}{},
+				"global_state": map[string]any{},
+				"dynamic_input": map[string]any{},
 			})
 			req := &pb.ExecuteTaskRequest{
 				Payload: payloadStruct,
@@ -141,13 +141,13 @@ func TestOpenAIAnalyzer_AnalyzeImage(t *testing.T) {
 	config.VisionModel = "test-vision-model"
 	analyzer := NewOpenAIAnalyzerWithConfig(config)
 
-	mockSchema, _ := structpb.NewStruct(map[string]interface{}{"properties": map[string]interface{}{"vision": map[string]interface{}{}}})
-	payloadStruct, _ := structpb.NewStruct(map[string]interface{}{
-		"node_config": map[string]interface{}{
+	mockSchema, _ := structpb.NewStruct(map[string]any{"properties": map[string]any{"vision": map[string]any{}}})
+	payloadStruct, _ := structpb.NewStruct(map[string]any{
+		"node_config": map[string]any{
 			"expected_schema_struct": mockSchema.AsMap(),
 		},
-		"global_state": map[string]interface{}{},
-		"dynamic_input": map[string]interface{}{},
+		"global_state": map[string]any{},
+		"dynamic_input": map[string]any{},
 	})
 	req := &pb.ExecuteTaskRequest{
 		Payload: payloadStruct,
@@ -193,13 +193,13 @@ func TestOpenAIAnalyzer_AnalyzeImage_VisionBaseURL(t *testing.T) {
 	config.VisionModel = "glm-ocr"
 	analyzer := NewOpenAIAnalyzerWithConfig(config)
 
-	mockSchema, _ := structpb.NewStruct(map[string]interface{}{"properties": map[string]interface{}{"vision": map[string]interface{}{}}})
-	payloadStruct, _ := structpb.NewStruct(map[string]interface{}{
-		"node_config": map[string]interface{}{
+	mockSchema, _ := structpb.NewStruct(map[string]any{"properties": map[string]any{"vision": map[string]any{}}})
+	payloadStruct, _ := structpb.NewStruct(map[string]any{
+		"node_config": map[string]any{
 			"expected_schema_struct": mockSchema.AsMap(),
 		},
-		"global_state": map[string]interface{}{},
-		"dynamic_input": map[string]interface{}{},
+		"global_state": map[string]any{},
+		"dynamic_input": map[string]any{},
 	})
 	req := &pb.ExecuteTaskRequest{
 		Payload: payloadStruct,

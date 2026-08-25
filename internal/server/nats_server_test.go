@@ -166,18 +166,6 @@ func (m *mockJS) PublishMsg(ctx context.Context, msg *nats.Msg, opts ...jetstrea
 	return &jetstream.PubAck{}, nil
 }
 
-type failingMockJS struct {
-	jetstream.JetStream
-}
-
-func (m *failingMockJS) Publish(ctx context.Context, subj string, data []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
-	return nil, fmt.Errorf("simulated NATS publish failure")
-}
-
-func (m *failingMockJS) PublishMsg(ctx context.Context, msg *nats.Msg, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
-	return nil, fmt.Errorf("simulated NATS publish failure")
-}
-
 func TestNatsServer_processMessage_RateLimit(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &mockAnalyzer{err: fmt.Errorf("429 Too Many Requests")}
@@ -297,8 +285,7 @@ func TestNatsServer_ModelRoutingOverride_ScannedPDF(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	server.processMessage(ctx, msg)
 
@@ -356,8 +343,7 @@ func TestNatsServer_ModelRoutingOverride_StructuredTextPDF(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	server.processMessage(ctx, msg)
 
@@ -414,8 +400,7 @@ func TestNatsServer_ModelRoutingOverride_HasFlagFalse_Fallback(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	server.processMessage(ctx, msg)
 

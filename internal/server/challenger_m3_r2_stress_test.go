@@ -50,28 +50,7 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 			store := &workingStore{data: []byte("sample pdf content")}
 			server := NewNatsServer(nil, js, analyzer, store, 1, "test", 1, 1, 8192)
 
-			globalState := map[string]any{
-				"functional": map[string]any{},
-			}
-			if tc.funcState != nil {
-				for k, v := range tc.funcState {
-					globalState["functional"].(map[string]any)[k] = v
-				}
-			}
-
-			payloadMap := map[string]any{
-				"global_state": globalState,
-			}
-			if tc.nodeConfig != nil {
-				payloadMap["node_config"] = tc.nodeConfig
-			} else {
-				payloadMap["node_config"] = map[string]any{}
-			}
-			if tc.storage != nil {
-				payloadMap["storage"] = tc.storage
-			}
-
-			st, _ := structpb.NewStruct(payloadMap)
+			st := buildTestPayload(tc.nodeConfig, tc.funcState, tc.storage)
 
 			req := &pb.ExecuteTaskRequest{
 				StepId:      "STEP_AMBIG",
@@ -121,7 +100,7 @@ func TestChallenger2_RapidConcurrentPDFSwitching(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(totalRequests)
 
-	for i := 0; i < totalRequests; i++ {
+	for i := range totalRequests {
 		go func(id int) {
 			defer wg.Done()
 
