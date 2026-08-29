@@ -1,35 +1,35 @@
 package server
 
 import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "io"
-    "path/filepath"
-    "regexp"
-    "slices"
-    "strconv"
-    "strings"
-    "time"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
 
-    "github.com/AndrewK4758/shared_utils/envutil"
+	"github.com/AndrewK4758/shared_utils/envutil"
 
-    "github.com/nats-io/nats.go"
-    "github.com/nats-io/nats.go/jetstream"
-    "google.golang.org/protobuf/encoding/protojson"
-    "google.golang.org/protobuf/proto"
-    "google.golang.org/protobuf/types/known/structpb"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 
-    "ai_service/internal/ai"
-    docparser "ai_service/internal/parser"
-    "ai_service/internal/storage"
+	"ai_service/internal/ai"
+	docparser "ai_service/internal/parser"
+	"ai_service/internal/storage"
 
-    "github.com/AndrewK4758/shared_utils/identityparser"
-    "github.com/AndrewK4758/shared_utils/logger"
-    "github.com/AndrewK4758/shared_utils/natsutil"
-    "github.com/AndrewK4758/shared_utils/workflowparser"
+	"github.com/AndrewK4758/shared_utils/identityparser"
+	"github.com/AndrewK4758/shared_utils/logger"
+	"github.com/AndrewK4758/shared_utils/natsutil"
+	"github.com/AndrewK4758/shared_utils/workflowparser"
 
-    pb "github.com/AndrewK4758/shared_protos"
+	pb "github.com/AndrewK4758/shared_protos"
 )
 
 type NatsServer struct {
@@ -137,7 +137,7 @@ func (s *NatsServer) handleMessage(ctx context.Context, m jetstream.Msg, sem cha
 		if r := recover(); r != nil {
 			t, a, j := natsutil.ExtractIdentityFromAiSubject(m.Subject())
 			logger.Info("AI_Service", "Recovered from panic in worker goroutine for Tenant=%s App=%s Job=%s: %v", t, a, j, r)
-			
+
 			natsErrorTimeoutStr := envutil.GetStringOrDefault("NATS_NACK_ERROR_TIMEOUT", "15")
 			natsErrorTimeout, errParse := strconv.Atoi(natsErrorTimeoutStr)
 			if errParse != nil || natsErrorTimeout <= 0 {
@@ -206,7 +206,6 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 	msgId := fmt.Sprintf("%p", msg)
 	s.keepAliveManager.Add(msgId, msg)
 	defer s.keepAliveManager.Remove(msgId)
-
 
 	logger.Info("AI_Service", "Received action request on subject: %s", msg.Subject())
 	replySubj := getReplySubject(msg)
@@ -494,203 +493,253 @@ func getStepName(req *pb.ExecuteTaskRequest) string {
 	return "AI_PROCESSING"
 }
 
-
 // MPL-327: Convergence & Manifest helpers - domain-agnostic, zero hardcoded vendor strings
 func (s *NatsServer) handleMPL327MetaCompiler(ctx context.Context, req *pb.ExecuteTaskRequest) (string, string, error) {
-    // Pass 2: compile DynamicLabelManifest from layout extracted in Node 1
-    // Reads GlobalState.functional layout summary, emits JSON with dynamic_labels, spatial_wipe_zones, confidence_threshold
-    // Uses analyzer.AnalyzeText with strict prompt; supports GlobalState.NonFunctional["ConfidenceThresholdOverride"]
-    parser := workflowparser.NewTaskRequestParser(req)
-    gs, err := parser.GetGlobalState()
-    if err != nil {
-        return "", "INVALID_PAYLOAD", fmt.Errorf("[Step: %s, URI: unknown] missing global_state: %w", getStepName(req), err)
-    }
-    // Extract override if present (tier 1) - non_functional may be absent
-    var overrideVal *float64
-    if nfRaw, ok := gs["non_functional"]; ok {
-        if nfMap, ok := nfRaw.(map[string]any); ok {
-            if v, ok := nfMap["ConfidenceThresholdOverride"]; ok {
-                switch ov := v.(type) {
-                case float64:
-                    if ov > 0 { overrideVal = &ov }
-                case float32:
-                    fv := float64(ov)
-                    if fv > 0 { overrideVal = &fv }
-                case int:
-                    fv := float64(ov)
-                    if fv > 0 { overrideVal = &fv }
-                }
-            }
-        }
-    }
-    // Determine document type for tier 2/3 resolution
-    docType := ""
-    if fRaw, ok := gs["functional"]; ok {
-        if fMap, ok := fRaw.(map[string]any); ok {
-            if dt, ok := fMap["DocumentType"]; ok {
-                if s, ok := dt.(string); ok { docType = s }
-            }
-            if dt, ok := fMap["document_type"]; ok && docType == "" {
-                if s, ok := dt.(string); ok { docType = s }
-            }
-        }
-    }
-    // MPL-327 Generic 3-tier: Tier1 override (above), Tier2 LLM/layout-density, Tier3 baseline 0.45
-    // Do NOT string-match docType ("closing"/"disclosure") — generic blank-template uses structural signals only.
-    // Tier2: try LLM-derived threshold from functional.llm_confidence_threshold or layout has_grid/header_density
-    threshold := 0.45
-    if overrideVal != nil {
-        threshold = *overrideVal
-        if threshold < 0.25 { threshold = 0.25 }
-        if threshold > 0.75 { threshold = 0.75 }
-    } else {
-        // Check for LLM-provided threshold or layout density hints in GlobalState.functional
-        if fRaw, ok := gs["functional"]; ok {
-            if fMap, ok := fRaw.(map[string]any); ok {
-                if v, ok := fMap["llm_confidence_threshold"]; ok {
-                    if fv, ok := toFloat64(v); ok && fv > 0 { threshold = fv }
-                } else if v, ok := fMap["has_grid"]; ok {
-                    if bv, ok := v.(bool); ok && bv { threshold = 0.38 }
-                } else if v, ok := fMap["header_density"]; ok {
-                    if fv, ok := toFloat64(v); ok && fv > 0.6 { threshold = 0.38 }
-                }
-                _ = fMap // keep docType unused generically
-            }
-        }
-        if threshold < 0.25 { threshold = 0.25 }
-        if threshold > 0.75 { threshold = 0.75 }
-    }
-    // Build deterministic manifest - zero hardcoded vendor strings, structure driven by layout
-    // Analyzer will refine via LLM meta-prompt; we provide baseline manifest
-    // Generic blank-template: LLM is authoritative. No hardcoded domain labels — fallback is EMPTY manifest, not synthetic.
-    // If LLM/analyzer fails, return empty labels + threshold only; spatial_wipe_zones stay empty and will be populated by LLM on success.
-    manifest := map[string]any{
-        "dynamic_labels": []string{},
-        "spatial_wipe_zones": []any{},
-        "confidence_threshold": threshold,
-        "document_summary": fmt.Sprintf("generic blank-template manifest threshold=%.2f (structural, no document-type switch)", threshold),
-    }
-    // Allow LLM to override via AnalyzeText if model available
-    if s.analyzer != nil {
-        // Provide layout text as documentContent
-        // Generic layout hint — do NOT leak documentType string matching; pass only structural signal
-        layoutText := fmt.Sprintf("Structural layout density threshold %.2f; infer dynamic_labels from font weight / grid geometry only (no document-type switch)", threshold)
-        if docType != "" { layoutText += fmt.Sprintf("\nOpaque doc hint (do NOT branch): %s", docType) }
-        if res, err := s.analyzer.AnalyzeText(ctx, layoutText, req, nil, "mpl327-meta-compiler"); err == nil && res != "" {
-            // If analyzer returns valid JSON manifest, prefer it
-            var parsed any
-            if json.Unmarshal([]byte(res), &parsed) == nil {
-                return res, "", nil
-            }
-        }
-    }
-    b, _ := json.Marshal(manifest)
-    return string(b), "", nil
+	// Pass 2: compile DynamicLabelManifest from layout extracted in Node 1
+	// Reads GlobalState.functional layout summary, emits JSON with dynamic_labels, spatial_wipe_zones, confidence_threshold
+	// Uses analyzer.AnalyzeText with strict prompt; supports GlobalState.NonFunctional["ConfidenceThresholdOverride"]
+	parser := workflowparser.NewTaskRequestParser(req)
+	gs, err := parser.GetGlobalState()
+	if err != nil {
+		return "", "INVALID_PAYLOAD", fmt.Errorf("[Step: %s, URI: unknown] missing global_state: %w", getStepName(req), err)
+	}
+	// Extract override if present (tier 1) - non_functional may be absent
+	var overrideVal *float64
+	if nfRaw, ok := gs["non_functional"]; ok {
+		if nfMap, ok := nfRaw.(map[string]any); ok {
+			if v, ok := nfMap["ConfidenceThresholdOverride"]; ok {
+				switch ov := v.(type) {
+				case float64:
+					if ov > 0 {
+						overrideVal = &ov
+					}
+				case float32:
+					fv := float64(ov)
+					if fv > 0 {
+						overrideVal = &fv
+					}
+				case int:
+					fv := float64(ov)
+					if fv > 0 {
+						overrideVal = &fv
+					}
+				}
+			}
+		}
+	}
+	// Determine document type for tier 2/3 resolution
+	docType := ""
+	if fRaw, ok := gs["functional"]; ok {
+		if fMap, ok := fRaw.(map[string]any); ok {
+			if dt, ok := fMap["DocumentType"]; ok {
+				if s, ok := dt.(string); ok {
+					docType = s
+				}
+			}
+			if dt, ok := fMap["document_type"]; ok && docType == "" {
+				if s, ok := dt.(string); ok {
+					docType = s
+				}
+			}
+		}
+	}
+	// MPL-327 Generic 3-tier: Tier1 override (above), Tier2 LLM/layout-density, Tier3 baseline 0.45
+	// Do NOT string-match docType ("closing"/"disclosure") — generic blank-template uses structural signals only.
+	// Tier2: try LLM-derived threshold from functional.llm_confidence_threshold or layout has_grid/header_density
+	threshold := 0.45
+	if overrideVal != nil {
+		threshold = *overrideVal
+		if threshold < 0.25 {
+			threshold = 0.25
+		}
+		if threshold > 0.75 {
+			threshold = 0.75
+		}
+	} else {
+		// Check for LLM-provided threshold or layout density hints in GlobalState.functional
+		if fRaw, ok := gs["functional"]; ok {
+			if fMap, ok := fRaw.(map[string]any); ok {
+				if v, ok := fMap["llm_confidence_threshold"]; ok {
+					if fv, ok := toFloat64(v); ok && fv > 0 {
+						threshold = fv
+					}
+				} else if v, ok := fMap["has_grid"]; ok {
+					if bv, ok := v.(bool); ok && bv {
+						threshold = 0.38
+					}
+				} else if v, ok := fMap["header_density"]; ok {
+					if fv, ok := toFloat64(v); ok && fv > 0.6 {
+						threshold = 0.38
+					}
+				}
+				_ = fMap // keep docType unused generically
+			}
+		}
+		if threshold < 0.25 {
+			threshold = 0.25
+		}
+		if threshold > 0.75 {
+			threshold = 0.75
+		}
+	}
+	// Build deterministic manifest - zero hardcoded vendor strings, structure driven by layout
+	// Analyzer will refine via LLM meta-prompt; we provide baseline manifest
+	// Generic blank-template: LLM is authoritative. No hardcoded domain labels — fallback is EMPTY manifest, not synthetic.
+	// If LLM/analyzer fails, return empty labels + threshold only; spatial_wipe_zones stay empty and will be populated by LLM on success.
+	manifest := map[string]any{
+		"dynamic_labels":       []string{},
+		"spatial_wipe_zones":   []any{},
+		"confidence_threshold": threshold,
+		"document_summary":     fmt.Sprintf("generic blank-template manifest threshold=%.2f (structural, no document-type switch)", threshold),
+	}
+	// Allow LLM to override via AnalyzeText if model available
+	if s.analyzer != nil {
+		// Provide layout text as documentContent
+		// Generic layout hint — do NOT leak documentType string matching; pass only structural signal
+		layoutText := fmt.Sprintf("Structural layout density threshold %.2f; infer dynamic_labels from font weight / grid geometry only (no document-type switch)", threshold)
+		if docType != "" {
+			layoutText += fmt.Sprintf("\nOpaque doc hint (do NOT branch): %s", docType)
+		}
+		if res, err := s.analyzer.AnalyzeText(ctx, layoutText, req, nil, "mpl327-meta-compiler"); err == nil && res != "" {
+			// If analyzer returns valid JSON manifest, prefer it
+			var parsed any
+			if json.Unmarshal([]byte(res), &parsed) == nil {
+				return res, "", nil
+			}
+		}
+	}
+	b, _ := json.Marshal(manifest)
+	return string(b), "", nil
 }
 
 func toFloat64(v any) (float64, bool) {
 	switch x := v.(type) {
-	case float64: return x, true
-	case float32: return float64(x), true
-	case int: return float64(x), true
-	case int32: return float64(x), true
-	case int64: return float64(x), true
+	case float64:
+		return x, true
+	case float32:
+		return float64(x), true
+	case int:
+		return float64(x), true
+	case int32:
+		return float64(x), true
+	case int64:
+		return float64(x), true
 	}
 	return 0, false
 }
 func (s *NatsServer) handleMPL327ResidualSweep(req *pb.ExecuteTaskRequest) (string, string, error) {
-    parser := workflowparser.NewTaskRequestParser(req)
-    gs, err := parser.GetGlobalState()
-    if err != nil {
-        return "", "INVALID_PAYLOAD", fmt.Errorf("[Step: %s] missing global_state: %w", getStepName(req), err)
-    }
-    funcMap := map[string]any{}
-    if fRaw, ok := gs["functional"]; ok {
-        if m, ok := fRaw.(map[string]any); ok { funcMap = m }
-    }
-    // Current PassCount (default 1)
-    passCount := 1
-    if pc, ok := funcMap["PassCount"]; ok {
-        switch v := pc.(type) {
-        case float64: passCount = int(v)
-        case int: passCount = v
-        case int32: passCount = int(v)
-        }
-    } else if pc, ok := funcMap["pass_count"]; ok {
-        switch v := pc.(type) {
-        case float64: passCount = int(v)
-        case int: passCount = v
-        }
-    }
-    if passCount < 1 {
-        return "", "IMPOSSIBLE_STATE", fmt.Errorf("[SEAM: IMPOSSIBLE_STATE] PassCount %d <1 for Job %s", passCount, req.Identity.JobId)
-    }
-    // Count residuals by scanning re-extracted text (from payload or functional)
-    var residualSamples []string
-    residualCount := 0
-    // Try to get re-extracted text from functional
-    textToScan := ""
-    for _, k := range []string{"extracted_text", "redacted_text", "residual_text", "DocumentText"} {
-        if v, ok := funcMap[k]; ok {
-            if s, ok := v.(string); ok && s != "" { textToScan = s; break }
-        }
-    }
-    // Also allow analyzer to provide count
-    if textToScan != "" {
-        // Count $ occurrences
-        idx := 0
-        for {
-            pos := strings.Index(textToScan[idx:], "$")
-            if pos == -1 { break }
-            abs := idx + pos
-            end := abs + 1
-            for end < len(textToScan) && (textToScan[end] >= '0' && textToScan[end] <= '9' || textToScan[end] == ',' || textToScan[end] == '.' ) { end++ }
-            sample := textToScan[abs:min(end, abs+16)]
-            residualCount++
-            if len(residualSamples) < 5 { residualSamples = append(residualSamples, strings.TrimSpace(sample)) }
-            idx = end
-            if residualCount > 100 { break }
-        }
-    }
-    // Check for explicit residual count in functional (from cpp_ml_worker residual_report)
-    if rc, ok := funcMap["ResidualValueCount"]; ok {
-        if v, ok := rc.(float64); ok { residualCount = int(v) }
-    } else if rc, ok := funcMap["residual_value_count"]; ok {
-        if v, ok := rc.(float64); ok { residualCount = int(v) }
-    }
+	parser := workflowparser.NewTaskRequestParser(req)
+	gs, err := parser.GetGlobalState()
+	if err != nil {
+		return "", "INVALID_PAYLOAD", fmt.Errorf("[Step: %s] missing global_state: %w", getStepName(req), err)
+	}
+	funcMap := map[string]any{}
+	if fRaw, ok := gs["functional"]; ok {
+		if m, ok := fRaw.(map[string]any); ok {
+			funcMap = m
+		}
+	}
+	// Current PassCount (default 1)
+	passCount := 1
+	if pc, ok := funcMap["PassCount"]; ok {
+		switch v := pc.(type) {
+		case float64:
+			passCount = int(v)
+		case int:
+			passCount = v
+		case int32:
+			passCount = int(v)
+		}
+	} else if pc, ok := funcMap["pass_count"]; ok {
+		switch v := pc.(type) {
+		case float64:
+			passCount = int(v)
+		case int:
+			passCount = v
+		}
+	}
+	if passCount < 1 {
+		return "", "IMPOSSIBLE_STATE", fmt.Errorf("[SEAM: IMPOSSIBLE_STATE] PassCount %d <1 for Job %s", passCount, req.Identity.JobId)
+	}
+	// Count residuals by scanning re-extracted text (from payload or functional)
+	var residualSamples []string
+	residualCount := 0
+	// Try to get re-extracted text from functional
+	textToScan := ""
+	for _, k := range []string{"extracted_text", "redacted_text", "residual_text", "DocumentText"} {
+		if v, ok := funcMap[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				textToScan = s
+				break
+			}
+		}
+	}
+	// Also allow analyzer to provide count
+	if textToScan != "" {
+		// Count $ occurrences
+		idx := 0
+		for {
+			pos := strings.Index(textToScan[idx:], "$")
+			if pos == -1 {
+				break
+			}
+			abs := idx + pos
+			end := abs + 1
+			for end < len(textToScan) && (textToScan[end] >= '0' && textToScan[end] <= '9' || textToScan[end] == ',' || textToScan[end] == '.') {
+				end++
+			}
+			sample := textToScan[abs:min(end, abs+16)]
+			residualCount++
+			if len(residualSamples) < 5 {
+				residualSamples = append(residualSamples, strings.TrimSpace(sample))
+			}
+			idx = end
+			if residualCount > 100 {
+				break
+			}
+		}
+	}
+	// Check for explicit residual count in functional (from cpp_ml_worker residual_report)
+	if rc, ok := funcMap["ResidualValueCount"]; ok {
+		if v, ok := rc.(float64); ok {
+			residualCount = int(v)
+		}
+	} else if rc, ok := funcMap["residual_value_count"]; ok {
+		if v, ok := rc.(float64); ok {
+			residualCount = int(v)
+		}
+	}
 
-    const maxPasses = 3
-    isConverged := residualCount == 0
-    nextPass := passCount
-    shouldFailFast := false
-    if !isConverged {
-        nextPass = passCount + 1
-        if nextPass > maxPasses || passCount >= maxPasses {
-            // [SEAM: LINEAGE_GAP]
-            shouldFailFast = true
-        }
-    }
+	const maxPasses = 3
+	isConverged := residualCount == 0
+	nextPass := passCount
+	shouldFailFast := false
+	if !isConverged {
+		nextPass = passCount + 1
+		if nextPass > maxPasses || passCount >= maxPasses {
+			// [SEAM: LINEAGE_GAP]
+			shouldFailFast = true
+		}
+	}
 
-    if shouldFailFast {
-        return "", "LINEAGE_GAP", fmt.Errorf("[SEAM: LINEAGE_GAP] Convergence loop exhausted %d passes for Job %s with %d residuals samples=%v", maxPasses, req.Identity.JobId, residualCount, residualSamples)
-    }
+	if shouldFailFast {
+		return "", "LINEAGE_GAP", fmt.Errorf("[SEAM: LINEAGE_GAP] Convergence loop exhausted %d passes for Job %s with %d residuals samples=%v", maxPasses, req.Identity.JobId, residualCount, residualSamples)
+	}
 
-    result := map[string]any{
-        "IsConverged": isConverged,
-        "PassCount": nextPass,
-        "ResidualValueCount": residualCount,
-        "ResidualSamples": residualSamples,
-        // Also emit snake_case for WorkflowExecutionService path compatibility
-        "is_converged": isConverged,
-        "pass_count": nextPass,
-        "residual_value_count": residualCount,
-    }
-    b, _ := json.Marshal(result)
-    // Return JSON that WorkflowExecutionService will merge into GlobalState.Functional
-    return string(b), "", nil
+	result := map[string]any{
+		"IsConverged":        isConverged,
+		"PassCount":          nextPass,
+		"ResidualValueCount": residualCount,
+		"ResidualSamples":    residualSamples,
+		// Also emit snake_case for WorkflowExecutionService path compatibility
+		"is_converged":         isConverged,
+		"pass_count":           nextPass,
+		"residual_value_count": residualCount,
+	}
+	b, _ := json.Marshal(result)
+	// Return JSON that WorkflowExecutionService will merge into GlobalState.Functional
+	return string(b), "", nil
 }
-
-
 
 func isVisionRequest(targetSubj string, modelID string, ext string) bool {
 	subjLower := strings.ToLower(targetSubj)
@@ -709,7 +758,7 @@ func isVisionRequest(targetSubj string, modelID string, ext string) bool {
 		}
 	}
 
-	if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".webp" || ext == ".tiff" || ext == ".bmp" {
+	if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".webp" || ext == ".tiff" || ext == ".tif" || ext == ".bmp" {
 		return true
 	}
 	return false
@@ -1293,5 +1342,3 @@ func (s *NatsServer) ResolveModelRoute(req *pb.ExecuteTaskRequest, taskSubject s
 
 	panic("action failed: unable to resolve model ID across all 4 tiers")
 }
-
-
