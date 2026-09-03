@@ -6,10 +6,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"golang.org/x/image/draw"
+	"golang.org/x/image/tiff"
 
 	"github.com/AndrewK4758/shared_utils/envutil"
 
@@ -221,6 +227,90 @@ func (o *OpenAIAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.E
 	return enforceDeterministicValidation(resp, req), nil
 }
 
+func isTIFF(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	return (data[0] == 'I' && data[1] == 'I' && data[2] == 0x2A && data[3] == 0x00) ||
+		(data[0] == 'M' && data[1] == 'M' && data[2] == 0x00 && data[3] == 0x2A)
+}
+
+func isPNG(data []byte) bool {
+	if len(data) < 8 {
+		return false
+	}
+	return data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G' &&
+		data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A
+}
+
+func isJPEG(data []byte) bool {
+	if len(data) < 3 {
+		return false
+	}
+	return data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF
+}
+
+const maxVisionDimension = 1536
+
+func scaleImageIfExceedsMax(img image.Image, maxDim int) image.Image {
+	bounds := img.Bounds()
+	w := bounds.Dx()
+	h := bounds.Dy()
+	if w <= maxDim && h <= maxDim {
+		return img
+	}
+
+	var newW, newH int
+	if w > h {
+		newW = maxDim
+		newH = int(float64(h) * (float64(maxDim) / float64(w)))
+	} else {
+		newH = maxDim
+		newW = int(float64(w) * (float64(maxDim) / float64(h)))
+	}
+	if newW < 1 {
+		newW = 1
+	}
+	if newH < 1 {
+		newH = 1
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+	draw.BiLinear.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
+	return dst
+}
+
+func normalizeImageForVision(imgBytes []byte) (string, string, error) {
+	var img image.Image
+	var err error
+
+	if isTIFF(imgBytes) {
+		img, err = tiff.Decode(bytes.NewReader(imgBytes))
+		if err != nil {
+			return "", "", fmt.Errorf("failed to decode TIFF image: %w", err)
+		}
+	} else if isPNG(imgBytes) || isJPEG(imgBytes) {
+		img, _, err = image.Decode(bytes.NewReader(imgBytes))
+		if err != nil {
+			return "", "", fmt.Errorf("failed to decode image: %w", err)
+		}
+	} else {
+		var format string
+		img, format, err = image.Decode(bytes.NewReader(imgBytes))
+		if err != nil {
+			return "", "", fmt.Errorf("unsupported or corrupted image format (%s): %w", format, err)
+		}
+	}
+
+	img = scaleImageIfExceedsMax(img, maxVisionDimension)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return "", "", fmt.Errorf("failed to encode normalized image to PNG: %w", err)
+	}
+	return "image/png", base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
 func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, req *pb.ExecuteTaskRequest, action *pb.ActionDefinition, modelID string) (string, error) {
 	prompt := buildPrompt(req, action, "(See attached image(s))")
 
@@ -231,11 +321,14 @@ func (o *OpenAIAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 	})
 
 	for _, img := range imageBytes {
-		base64Img := base64.StdEncoding.EncodeToString(img)
+		mimeType, base64Img, err := normalizeImageForVision(img)
+		if err != nil {
+			return "", fmt.Errorf("failed to normalize image for vision: %w", err)
+		}
 		contentArray = append(contentArray, map[string]any{
 			"type": "image_url",
 			"image_url": map[string]any{
-				"url": fmt.Sprintf("data:image/jpeg;base64,%s", base64Img),
+				"url": fmt.Sprintf("data:%s;base64,%s", mimeType, base64Img),
 			},
 		})
 	}
