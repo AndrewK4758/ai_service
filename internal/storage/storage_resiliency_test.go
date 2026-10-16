@@ -13,7 +13,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-// TestResiliency_RetryCountAndSleepVerification verifies STORAGE_FETCH_RETRY_COUNT and STORAGE_FETCH_RETRY_SLEEP_MS.
 func TestResiliency_RetryCountAndSleepVerification(t *testing.T) {
 	t.Setenv("STORAGE_FETCH_RETRY_COUNT", "3")
 	t.Setenv("STORAGE_FETCH_RETRY_SLEEP_MS", "10")
@@ -36,7 +35,7 @@ func TestResiliency_RetryCountAndSleepVerification(t *testing.T) {
 	}
 
 	finalCalls := callCount.Load()
-	if finalCalls != 4 { // 1 initial + 3 retries = 4
+	if finalCalls != 4 {
 		t.Errorf("expected 4 total attempts for retryCount=3, got %d", finalCalls)
 	}
 
@@ -46,7 +45,6 @@ func TestResiliency_RetryCountAndSleepVerification(t *testing.T) {
 	}
 }
 
-// TestResiliency_ImmediateContextTimeout verifies FetchFile fails immediately when context is pre-cancelled.
 func TestResiliency_ImmediateContextTimeout(t *testing.T) {
 	var callCount atomic.Int64
 	client := &mockMultiAttemptGatewayClient{
@@ -58,7 +56,7 @@ func TestResiliency_ImmediateContextTimeout(t *testing.T) {
 
 	store := NewGatewayStorageWithRetry(client, 3, 50)
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel before start
+	cancel()
 
 	_, err := store.FetchFile(ctx, "internal-store://tenant/app/job/doc.pdf", nil)
 	if !errors.Is(err, context.Canceled) {
@@ -69,7 +67,6 @@ func TestResiliency_ImmediateContextTimeout(t *testing.T) {
 	}
 }
 
-// TestResiliency_StreamRecvContextError verifies context error during chunk receiving.
 func TestResiliency_StreamRecvContextError(t *testing.T) {
 	client := &mockMultiAttemptGatewayClient{
 		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
@@ -81,7 +78,7 @@ func TestResiliency_StreamRecvContextError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	time.Sleep(30 * time.Millisecond) // Ensure context expires before Recv
+	time.Sleep(30 * time.Millisecond)
 
 	_, err := store.FetchFile(ctx, "internal-store://tenant/app/job/slow.pdf", nil)
 	if err == nil {
@@ -97,7 +94,6 @@ func (s *contextAwareDownloadStream) Recv() (*pb.DownloadResponse, error) {
 	return nil, fmt.Errorf("rpc error: code = Canceled desc = context canceled")
 }
 
-// TestResiliency_EOFWithExpiredContext tests when stream returns EOF after context has expired.
 func TestResiliency_EOFWithExpiredContext(t *testing.T) {
 	client := &mockMultiAttemptGatewayClient{
 		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
@@ -133,7 +129,6 @@ func (s *eofAfterDelayStream) Recv() (*pb.DownloadResponse, error) {
 	return &pb.DownloadResponse{ChunkData: []byte("partial")}, io.EOF
 }
 
-// TestResiliency_HighConcurrencyRaceDetector stress tests GatewayStorage under high parallel load.
 func TestResiliency_HighConcurrencyRaceDetector(t *testing.T) {
 	client := &mockMultiAttemptGatewayClient{
 		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {

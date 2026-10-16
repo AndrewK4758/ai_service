@@ -13,12 +13,12 @@ import (
 
 var whitespaceRegex = regexp.MustCompile(`\s+`)
 
-// NormalizeJsonOutput is an alias for NormalizeVisionOutput to enforce deterministic schema validation across all text and vision tasks.
+// NormalizeJsonOutput normalizes JSON model output against the request's expected schema.
 func NormalizeJsonOutput(responseStr string, req *pb.ExecuteTaskRequest) string {
 	return NormalizeVisionOutput(responseStr, req)
 }
 
-// NormalizeVisionOutput cleans, parses, and normalizes vision model JSON outputs according to schema contracts.
+// NormalizeVisionOutput cleans, parses, and normalizes model JSON output against the request schema.
 func NormalizeVisionOutput(responseStr string, req *pb.ExecuteTaskRequest) string {
 	cleaned := jsonclean.CleanJSON(responseStr)
 

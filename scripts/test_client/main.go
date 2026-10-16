@@ -24,7 +24,6 @@ func main() {
 	}
 	inputPath := os.Args[1]
 
-	// Determine if input is a single file or a directory
 	info, err := os.Stat(inputPath)
 	if err != nil {
 		logger.Fatal("AI_Service", "Failed to stat input path: %v", err)
@@ -51,7 +50,6 @@ func main() {
 
 	fmt.Printf("Found %d file(s) to process.\n", len(filesToProcess))
 
-	// Connect to our gRPC Server
 	conn, err := grpc.NewClient(envutil.MustGetString("SERVER_PORT"), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		logger.Fatal("AI_Service", "did not connect: %v", err)
@@ -64,7 +62,6 @@ func main() {
 	}(conn)
 	client := pb.NewDocumentProcessorClient(conn)
 
-	// Connect to NATS JetStream to listen for the async responses
 	nc, err := nats.Connect(nats.DefaultURL)
 	if err != nil {
 		logger.Fatal("AI_Service", "failed to connect to NATS: %v", err)
@@ -96,7 +93,6 @@ func main() {
 		logger.Fatal("AI_Service", "failed to create JetStream consumer: %v", err)
 	}
 
-	// Setup a channel to block until we get all responses
 	done := make(chan []byte, len(filesToProcess))
 
 	cc, err := cons.Consume(func(msg jetstream.Msg) {
@@ -114,7 +110,6 @@ func main() {
 	startTime := time.Now()
 	var wg sync.WaitGroup
 
-	// Dispatch all requests concurrently
 	for _, filePath := range filesToProcess {
 		wg.Add(1)
 		go func(path string) {
@@ -143,7 +138,7 @@ func main() {
 				CustomInstructions: "Extract precisely. Missing values return null.",
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // Only need short timeout for async dispatch
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
 			stream, err := client.ProcessDocument(ctx)
@@ -177,14 +172,12 @@ func main() {
 		}(filePath)
 	}
 
-	// Wait for all gRPC dispatches to finish
 	wg.Wait()
 	fmt.Printf("\nAll %d files successfully dispatched to the async queue in %v.\n", len(filesToProcess), time.Since(startTime))
 	fmt.Printf("Waiting for all async AI processing to finish via NATS...\n\n")
 
-	// Wait for the background NATS responses
 	receivedCount := 0
-	timeout := time.After(30 * time.Minute) // Large timeout for batch processing
+	timeout := time.After(30 * time.Minute)
 
 	for receivedCount < len(filesToProcess) {
 		select {

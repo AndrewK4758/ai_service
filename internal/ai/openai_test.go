@@ -123,7 +123,6 @@ func TestOpenAIAnalyzer_AnalyzeText(t *testing.T) {
 }
 
 func TestOpenAIAnalyzer_AnalyzeImage(t *testing.T) {
-	// Simple sanity check for vision payload wrapping
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		resp := openAIResponse{}
@@ -225,7 +224,6 @@ func TestOpenAIAnalyzer_AnalyzeImage_VisionBaseURL(t *testing.T) {
 }
 
 func TestOpenAIAnalyzer_AnalyzeImage_TIFFTranscoding(t *testing.T) {
-	// 1. Create a minimal valid 2x2 TIFF image
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	var tiffBuf bytes.Buffer
 	if err := tiff.Encode(&tiffBuf, img, nil); err != nil {
@@ -295,7 +293,6 @@ func TestOpenAIAnalyzer_AnalyzeImage_TIFFTranscoding(t *testing.T) {
 }
 
 func TestNormalizeImageForVision_Formats(t *testing.T) {
-	// TIFF
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	var tiffBuf bytes.Buffer
 	tiff.Encode(&tiffBuf, img, nil)
@@ -304,7 +301,6 @@ func TestNormalizeImageForVision_Formats(t *testing.T) {
 		t.Errorf("TIFF normalization failed: mime=%s, err=%v", mime, err)
 	}
 
-	// PNG
 	var pngBuf bytes.Buffer
 	png.Encode(&pngBuf, img)
 	mime, b64, err = normalizeImageForVision(pngBuf.Bytes())
@@ -312,7 +308,6 @@ func TestNormalizeImageForVision_Formats(t *testing.T) {
 		t.Errorf("PNG normalization failed: mime=%s, err=%v", mime, err)
 	}
 
-	// JPEG
 	var jpegBuf bytes.Buffer
 	if err := jpeg.Encode(&jpegBuf, img, nil); err != nil {
 		t.Fatalf("failed to encode test JPEG: %v", err)
@@ -324,7 +319,6 @@ func TestNormalizeImageForVision_Formats(t *testing.T) {
 }
 
 func TestNormalizeImageForVision_DownscalesOversizedImage(t *testing.T) {
-	// Create an oversized image 2000x3000 (> 1536)
 	img := image.NewRGBA(image.Rect(0, 0, 2000, 3000))
 	var pngBuf bytes.Buffer
 	if err := png.Encode(&pngBuf, img); err != nil {
@@ -339,7 +333,6 @@ func TestNormalizeImageForVision_DownscalesOversizedImage(t *testing.T) {
 		t.Errorf("expected mime image/png, got %s", mime)
 	}
 
-	// Decode back to check scaled dimensions
 	decodedBytes, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		t.Fatalf("failed to decode base64: %v", err)

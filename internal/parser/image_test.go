@@ -6,7 +6,6 @@ import (
 )
 
 func TestConvertPdfToImages_InvalidPDF(t *testing.T) {
-	// Without pdftoppm available, or with an invalid PDF, this should return an error
 	_, err := ConvertPdfToImages([]byte("not a pdf"))
 	if err == nil {
 		t.Fatal("Expected error for invalid PDF, got nil")

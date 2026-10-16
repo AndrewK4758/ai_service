@@ -485,7 +485,6 @@ func TestNatsServer_handleMessage_PoisonPillPanic_NakWithDelay(t *testing.T) {
 	analyzer := &mockAnalyzer{}
 	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1, 8192)
 
-	// Create a request missing TaskSubject which will cause processMessage to panic
 	req := &pb.ExecuteTaskRequest{
 		Identity: &pb.InfrastructureIdentity{TenantId: "t1", AppId: "a1", JobId: "j1"},
 	}
@@ -504,10 +503,8 @@ func TestNatsServer_handleMessage_PoisonPillPanic_NakWithDelay(t *testing.T) {
 
 	sem := make(chan struct{}, 1)
 
-	// Set a timeout environment variable for NakWithDelay
 	t.Setenv("NATS_NACK_ERROR_TIMEOUT", "10")
 
-	// Call handleMessage directly. It should recover from the panic and call NakWithDelay.
 	server.handleMessage(context.Background(), msg, sem)
 
 	if !msg.nakCalled {
@@ -686,7 +683,6 @@ func TestNatsServer_MPL402_4TierModelResolutionHierarchy(t *testing.T) {
 	analyzer := &trackingAnalyzer{}
 	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1, 8192)
 
-	// Case 1: Tier 1 Client Override
 	reqTier1 := &pb.ExecuteTaskRequest{
 		TaskSubject: "worker.ai.extract_entities",
 		Payload: &structpb.Struct{
@@ -704,7 +700,6 @@ func TestNatsServer_MPL402_4TierModelResolutionHierarchy(t *testing.T) {
 		t.Errorf("Tier 1 resolution mismatch: got model %q, tier %d", model, tier)
 	}
 
-	// Case 2: Tier 2 Action Subject Route
 	reqTier2 := &pb.ExecuteTaskRequest{
 		TaskSubject: "worker.ai.extract_entities",
 		Payload: &structpb.Struct{
@@ -720,7 +715,6 @@ func TestNatsServer_MPL402_4TierModelResolutionHierarchy(t *testing.T) {
 		t.Errorf("Tier 2 resolution mismatch: got model %q, tier %d", model, tier)
 	}
 
-	// Case 3: Tier 3 Modality Route (is_scanned = true)
 	reqTier3 := &pb.ExecuteTaskRequest{
 		TaskSubject: "worker.ai.generic_task",
 		Payload: &structpb.Struct{
@@ -745,7 +739,6 @@ func TestNatsServer_MPL402_4TierModelResolutionHierarchy(t *testing.T) {
 		t.Errorf("Tier 3 resolution mismatch: got model %q, tier %d", model, tier)
 	}
 
-	// Case 4: Tier 4 Global Default Fallback
 	reqTier4 := &pb.ExecuteTaskRequest{
 		TaskSubject: "worker.ai.unmapped_custom_action",
 		Payload: &structpb.Struct{
@@ -848,7 +841,6 @@ func TestNatsServer_MPL402_DeadLetterQueueOnPoisonPill(t *testing.T) {
 	t.Setenv("OPENAI_TEXT_MODEL", "gpt-4o")
 
 	js := &capturingJS{}
-	// Analyzer returns unparseable non-JSON garbage (poison pill)
 	analyzer := &trackingAnalyzer{customResult: `<<<NON_JSON_CORRUPTED_OUTPUT>>>`}
 	server := NewNatsServer(nil, js, analyzer, nil, 1, "test", 1, 1, 8192)
 

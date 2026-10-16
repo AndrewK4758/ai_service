@@ -14,7 +14,6 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// TestChallengerM4I2_PanicFailFastScenarios empirically validates all panic fail-fast rules in ai_service.
 func TestChallengerM4I2_PanicFailFastScenarios(t *testing.T) {
 	os.Setenv("MODEL_ROUTE_INFERENCE", "model-inference-v1")
 	os.Setenv("MODEL_ROUTE_DEFAULT", "model-default-v1")
@@ -132,7 +131,6 @@ func TestChallengerM4I2_PanicFailFastScenarios(t *testing.T) {
 	})
 }
 
-// TestChallengerM4I2_ConcurrentStressAndRaceSafety tests race conditions and panic handling under high concurrency.
 func TestChallengerM4I2_ConcurrentStressAndRaceSafety(t *testing.T) {
 	os.Setenv("MODEL_ROUTE_INFERENCE", "model-inference-v1")
 	os.Setenv("OPENAI_TEXT_MODEL", "gpt-4o-text")

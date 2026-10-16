@@ -141,7 +141,6 @@ func (o *OpenAIAnalyzer) callOpenAI(ctx context.Context, reqBody openAIRequest, 
 	}
 	url := fmt.Sprintf("%s/chat/completions", strings.TrimSuffix(baseURL, "/"))
 
-	// Create context using the HTTP client's timeout for safety, default to 5m if 0
 	timeout := o.config.HTTPClient.Timeout
 	if timeout == 0 {
 		timeout = getInferenceTimeout()

@@ -10,7 +10,6 @@ import (
 // ConvertPdfToImages uses pdftoppm to convert a PDF into a slice of JPEG images.
 // It requires poppler-utils to be installed on the system.
 func ConvertPdfToImages(pdfBytes []byte) ([][]byte, error) {
-	// Create a temporary directory for the conversion
 	tmpDir, err := os.MkdirTemp("", "pdf-to-img-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
@@ -22,13 +21,11 @@ func ConvertPdfToImages(pdfBytes []byte) ([][]byte, error) {
 		return nil, fmt.Errorf("failed to write temp pdf: %w", err)
 	}
 
-	// pdftoppm -jpeg input.pdf output_prefix
 	cmd := exec.Command("pdftoppm", "-jpeg", pdfPath, filepath.Join(tmpDir, "page"))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("pdftoppm failed: %v, output: %s", err, string(output))
 	}
 
-	// Read generated JPEG files
 	entries, err := os.ReadDir(tmpDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read temp dir: %w", err)

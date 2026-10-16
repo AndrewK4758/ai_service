@@ -69,7 +69,6 @@ func (b *BedrockAnalyzer) AnalyzeText(ctx context.Context, text string, req *pb.
 		m = b.textModel
 	}
 
-	// Bedrock Converse API
 	converseReq := &bedrockruntime.ConverseInput{
 		ModelId: &m,
 		Messages: []types.Message{
@@ -111,7 +110,7 @@ func (b *BedrockAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte,
 	for _, bytes := range imageBytes {
 		contentBlocks = append(contentBlocks, &types.ContentBlockMemberImage{
 			Value: types.ImageBlock{
-				Format: types.ImageFormatJpeg, // Assume jpeg
+				Format: types.ImageFormatJpeg,
 				Source: &types.ImageSourceMemberBytes{Value: bytes},
 			},
 		})

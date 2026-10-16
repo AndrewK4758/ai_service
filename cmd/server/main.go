@@ -25,7 +25,6 @@ import (
 )
 
 func main() {
-	// Attempt to load .env file (ignore if it doesn't exist)
 	envutil.LoadEnv(".env", "ai_service/.env", "../.env", "../../.env")
 	logger.InitLogger()
 
@@ -43,7 +42,6 @@ func main() {
 
 	aiHost := envutil.MustGetString("OPENAI_BASE_URL")
 
-	// Configure the dual AI models
 	aiTextModel := envutil.MustGetString("OPENAI_TEXT_MODEL")
 	aiVisionModel := envutil.MustGetString("OPENAI_VISION_MODEL")
 	aiEmbeddingModel := envutil.MustGetEmbeddingModel()
@@ -51,7 +49,6 @@ func main() {
 	inferenceRoute := envutil.MustGetString("MODEL_ROUTE_INFERENCE")
 	extractionRoute := envutil.MustGetString("MODEL_ROUTE_EXTRACTION")
 
-	// Connect to NATS
 	natsURL := envutil.MustGetString("NATS_URL")
 	nc, err := natsutil.ConnectWithRetries(natsURL, "AI_Service")
 	if err != nil {
@@ -96,7 +93,6 @@ func main() {
 		logger.Fatal("AI_Service", "invalid OPENAI_TIMEOUT_MINUTES: %v", err)
 	}
 
-	// Initialize the AI Analyzer config
 	config := ai.DefaultLocalConfig()
 	config.BaseURL = aiHost
 	config.TextModel = aiTextModel
@@ -143,7 +139,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle graceful shutdown
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)

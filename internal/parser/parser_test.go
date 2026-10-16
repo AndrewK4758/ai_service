@@ -25,7 +25,6 @@ func TestExtractDocxText_InvalidZip(t *testing.T) {
 }
 
 func TestExtractDocxText_NoDocumentXML(t *testing.T) {
-	// Create a valid zip with no word/document.xml
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
 	w.Create("dummy.txt")

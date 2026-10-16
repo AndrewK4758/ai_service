@@ -74,7 +74,6 @@ func TestAnthropicAnalyzer_AnalyzeText(t *testing.T) {
 	parser := req
 	action := &pb.ActionDefinition{Name: "test_action"}
 
-	// Test 1: Fallback model
 	res, err := analyzer.AnalyzeText(ctx, "Sample document text", parser, action, "claude-3-5-sonnet-20241022")
 	if err != nil {
 		t.Fatalf("AnalyzeText failed: %v", err)
@@ -94,7 +93,6 @@ func TestAnthropicAnalyzer_AnalyzeText(t *testing.T) {
 		t.Errorf("expected cleaned JSON '%s', got '%s'", expectedJSON, res)
 	}
 
-	// Test 2: Model override
 	_, err = analyzer.AnalyzeText(ctx, "Sample text 2", parser, action, "claude-3-haiku-20240307")
 	if err != nil {
 		t.Fatalf("AnalyzeText with override failed: %v", err)
@@ -200,7 +198,6 @@ func TestAnthropicAnalyzer_ErrorHandling(t *testing.T) {
 func TestAnthropicAnalyzer_ConfigFallbacks(t *testing.T) {
 	os.Unsetenv("ANTHROPIC_BASE_URL")
 		defer os.Setenv("ANTHROPIC_BASE_URL", "http://test")
-	// Test AuthToken fallback when AnthropicAPIKey is empty
 	config := OpenAIConfig{
 		AuthToken: "fallback-auth-token",
 		TextModel: "claude-3-haiku-20240307",

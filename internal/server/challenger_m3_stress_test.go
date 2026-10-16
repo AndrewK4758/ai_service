@@ -84,7 +84,6 @@ func buildTestPayload(nodeConfig, funcState, storage map[string]any) *structpb.S
 	return st
 }
 
-// TestChallenger_DynamicModelRouting_RaceAndConcurrency tests dynamic model routing under race conditions with 300 concurrent requests.
 func TestChallenger_DynamicModelRouting_RaceAndConcurrency(t *testing.T) {
 	os.Setenv("OPENAI_VISION_MODEL", "gpt-4o-vision-test")
 	os.Setenv("OPENAI_TEXT_MODEL", "gemma4-extended-test")
@@ -121,7 +120,7 @@ func TestChallenger_DynamicModelRouting_RaceAndConcurrency(t *testing.T) {
 			case 1:
 				payloadMap["global_state"].(map[string]any)["functional"].(map[string]any)["is_scanned"] = false
 			case 2:
-				// No IsScanned flag -> should fall back to resolveModelID(subject)
+				// Leave is_scanned unset to fall back to subject routing.
 			}
 
 			payload, _ := structpb.NewStruct(payloadMap)
@@ -170,7 +169,6 @@ func TestChallenger_DynamicModelRouting_RaceAndConcurrency(t *testing.T) {
 	}
 }
 
-// TestChallenger_DynamicModelRouting_EdgeCaseFlags tests all variations of IsScanned metadata & functional state formats.
 func TestChallenger_DynamicModelRouting_EdgeCaseFlags(t *testing.T) {
 	os.Setenv("OPENAI_VISION_MODEL", "vision-model-override")
 	os.Setenv("OPENAI_TEXT_MODEL", "text-model-override")

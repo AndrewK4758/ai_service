@@ -63,7 +63,6 @@ func TestNormalizeVisionOutput_MultiLineTableCells(t *testing.T) {
 		t.Fatalf("failed to unmarshal normalized output: %v", err)
 	}
 
-	// Root extra field should be removed
 	if _, exists := result["extra_root_field"]; exists {
 		t.Errorf("expected extra_root_field to be stripped")
 	}

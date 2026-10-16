@@ -11,7 +11,7 @@ import (
 	"github.com/AndrewK4758/shared_utils/jsonclean"
 )
 
-// ExtractPdfText uses poppler-utils (pdftotext) for extremely robust extraction
+// ExtractPdfText extracts plain text from PDF bytes using pdftotext.
 func ExtractPdfText(fileBytes []byte) (string, error) {
 	if len(fileBytes) == 0 {
 		return "", fmt.Errorf("cannot extract text from empty byte slice")
@@ -33,7 +33,7 @@ func ExtractPdfText(fileBytes []byte) (string, error) {
 	return jsonclean.SanitizeString(outBuf.String()), nil
 }
 
-// docxDocument represents the internal word/document.xml structure
+// docxDocument represents the internal word/document.xml structure.
 type docxDocument struct {
 	XMLName xml.Name `xml:"document"`
 	Body    struct {
@@ -43,7 +43,7 @@ type docxDocument struct {
 	} `xml:"body"`
 }
 
-// ExtractDocxText unzips the docx and extracts pure text from the XML natively
+// ExtractDocxText extracts plain text from word/document.xml inside a DOCX archive.
 func ExtractDocxText(fileBytes []byte) (string, error) {
 	reader, err := zip.NewReader(bytes.NewReader(fileBytes), int64(len(fileBytes)))
 	if err != nil {

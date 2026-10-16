@@ -8,7 +8,6 @@ import (
 func TestMain(m *testing.M) {
 	os.Setenv("ANTHROPIC_TEXT_MODEL", "test-text")
 		os.Setenv("ANTHROPIC_VISION_MODEL", "test-vision")
-	// Set required environment variables for tests
 	os.Setenv("ANTHROPIC_API_KEY", "test")
 		os.Setenv("ANTHROPIC_VERSION", "2023-06-01")
 		os.Setenv("ANTHROPIC_BASE_URL", "http://test")

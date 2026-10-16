@@ -14,7 +14,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-// TestChallenger_FetchFile_ChunkInterruptionWithExpiredContext tests when context expires mid-stream between chunks.
 func TestChallenger_FetchFile_ChunkInterruptionWithExpiredContext(t *testing.T) {
 	client := &mockMultiAttemptGatewayClient{
 		streamFunc: func(ctx context.Context, call int) (pb.StorageGatewayService_DownloadDocumentClient, error) {
@@ -30,7 +29,7 @@ func TestChallenger_FetchFile_ChunkInterruptionWithExpiredContext(t *testing.T) 
 
 	store := NewGatewayStorageWithRetry(client, 2, 10)
 
-	// Context times out right after chunk 1 (at 20ms)
+	// Timeout expires after the first chunk (at 20ms).
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
@@ -68,7 +67,6 @@ func (s *slowChunkStream) Recv() (*pb.DownloadResponse, error) {
 	return &pb.DownloadResponse{ChunkData: chunk}, nil
 }
 
-// TestChallenger_FetchFile_RetryExhaustion_DetailedError checks that after N retries, the returned error wraps the last error properly.
 func TestChallenger_FetchFile_RetryExhaustion_DetailedError(t *testing.T) {
 	var attempts atomic.Int32
 	client := &mockMultiAttemptGatewayClient{
@@ -78,7 +76,7 @@ func TestChallenger_FetchFile_RetryExhaustion_DetailedError(t *testing.T) {
 		},
 	}
 
-	store := NewGatewayStorageWithRetry(client, 3, 5) // 3 retries = 4 total attempts
+	store := NewGatewayStorageWithRetry(client, 3, 5)
 	_, err := store.FetchFile(context.Background(), "internal-store://t/a/j/retry_test.doc", nil)
 
 	if err == nil {
@@ -100,7 +98,6 @@ func TestChallenger_FetchFile_RetryExhaustion_DetailedError(t *testing.T) {
 	_ = expectedSubstr
 }
 
-// TestChallenger_FetchFile_HighConcurrencyStress 200 concurrent requests stress test
 func TestChallenger_FetchFile_HighConcurrencyStress(t *testing.T) {
 	var totalRPCs atomic.Int64
 	client := &mockMultiAttemptGatewayClient{

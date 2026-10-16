@@ -28,7 +28,6 @@ func init() {
 	os.Setenv("MODEL_ROUTE_SUBJECT", "worker.ai.inference")
 }
 
-// TestAdversarial_AIService_ModelResolutionAndVisionRoutingEdgeCases tests edge cases in subject parsing & vision detection.
 func TestAdversarial_AIService_ModelResolutionAndVisionRoutingEdgeCases(t *testing.T) {
 	t.Setenv("MODEL_ROUTE_DEFAULT", "default-model-v1")
 	t.Setenv("MODEL_ROUTE_INFERENCE", "inference-model-v2")
@@ -107,7 +106,6 @@ func TestAdversarial_AIService_ModelResolutionAndVisionRoutingEdgeCases(t *testi
 	})
 }
 
-// TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths verifies exact error context formatting.
 func TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths(t *testing.T) {
 	t.Run("NACK / Error Reply Context Enrichment", func(t *testing.T) {
 		js := &resiliencyCapturingJS{}
@@ -175,12 +173,11 @@ func TestAdversarial_AIService_ErrorContractContextEnrichment_AllPaths(t *testin
 	})
 }
 
-// TestAdversarial_AIService_JITByteDiscardAndMemoryAudit stress tests JIT memory discarding.
 func TestAdversarial_AIService_JITByteDiscardAndMemoryAudit(t *testing.T) {
 	js := &resiliencyCapturingJS{}
 	analyzer := &memoryAuditAnalyzer{}
 
-	payloadSize := 5 * 1024 * 1024 // 5MB
+	payloadSize := 5 * 1024 * 1024
 	bigPayload := make([]byte, payloadSize)
 	for i := range bigPayload {
 		bigPayload[i] = 'Z'
@@ -193,7 +190,6 @@ func TestAdversarial_AIService_JITByteDiscardAndMemoryAudit(t *testing.T) {
 	var mBefore runtime.MemStats
 	runtime.ReadMemStats(&mBefore)
 
-	// Run 20 sequential JIT fetches of 5MB files
 	for range 20 {
 		payload, _ := structpb.NewStruct(map[string]any{
 			"node_config": map[string]any{},
@@ -239,7 +235,6 @@ func TestAdversarial_AIService_JITByteDiscardAndMemoryAudit(t *testing.T) {
 	}
 }
 
-// TestAdversarial_AIService_HighConcurrencyStress 100 parallel workers under race detector.
 func TestAdversarial_AIService_HighConcurrencyStress(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &memoryAuditAnalyzer{}

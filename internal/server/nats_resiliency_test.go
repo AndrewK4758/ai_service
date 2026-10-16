@@ -86,11 +86,10 @@ func (c *resiliencyCapturingJS) PublishMsg(ctx context.Context, msg *nats.Msg, o
 	return &jetstream.PubAck{}, nil
 }
 
-// TestResiliency_NatsServer_JITMemoryDiscarding verifies that JIT fetch successfully processes doc bytes.
 func TestResiliency_NatsServer_JITMemoryDiscarding(t *testing.T) {
 	js := &resiliencyCapturingJS{}
 	analyzer := &memoryAuditAnalyzer{}
-	largePayload := make([]byte, 1024*1024) // 1MB payload
+	largePayload := make([]byte, 1024*1024)
 	for i := range largePayload {
 		largePayload[i] = 'A'
 	}
@@ -140,7 +139,6 @@ func TestResiliency_NatsServer_JITMemoryDiscarding(t *testing.T) {
 	}
 }
 
-// TestResiliency_NatsServer_HighConcurrencyStress runs 50 concurrent processMessage calls to verify race freedom.
 func TestResiliency_NatsServer_HighConcurrencyStress(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &memoryAuditAnalyzer{}
@@ -190,7 +188,6 @@ func TestResiliency_NatsServer_HighConcurrencyStress(t *testing.T) {
 	}
 }
 
-// TestResiliency_ErrorFormatVerification checks error bubble format across multiple failure modes.
 func TestResiliency_ErrorFormatVerification(t *testing.T) {
 	os.Setenv("SERVICE_NAME", "ai_service")
 	tests := []struct {

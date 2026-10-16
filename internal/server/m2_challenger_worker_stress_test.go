@@ -16,9 +16,7 @@ func createTestPayloadStruct(m map[string]any) *structpb.Struct {
 	return s
 }
 
-// TestM2Challenger_AIService_IsScannedRootIgnored verifies that root payload IsScanned is ignored
 func TestM2Challenger_AIService_IsScannedRootIgnored(t *testing.T) {
-	// Root level IsScanned = true, but metadata and global_state have no IsScanned
 	rootPayload := createTestPayloadStruct(map[string]any{
 		"IsScanned":  true,
 		"is_scanned": "true",
@@ -29,7 +27,6 @@ func TestM2Challenger_AIService_IsScannedRootIgnored(t *testing.T) {
 		extractIsScannedFlag(req)
 	}, "extractIsScannedFlag should panic on missing global_state, ignoring legacy root payload")
 
-	// Valid IsScanned inside global_state.functional
 	validPayload := createTestPayloadStruct(map[string]any{
 		"global_state": map[string]any{
 			"functional": map[string]any{
@@ -45,7 +42,6 @@ func TestM2Challenger_AIService_IsScannedRootIgnored(t *testing.T) {
 	}
 }
 
-// TestM2Challenger_AIService_DocumentUriRootSupported verifies that root payload DocumentUri is supported
 func TestM2Challenger_AIService_DocumentUriRootSupported(t *testing.T) {
 	rootPayload := createTestPayloadStruct(map[string]any{
 		"node_config":  map[string]any{},

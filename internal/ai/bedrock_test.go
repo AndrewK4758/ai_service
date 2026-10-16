@@ -53,7 +53,6 @@ func TestBedrockAnalyzer_AnalyzeText(t *testing.T) {
 	parser := req
 	action := &pb.ActionDefinition{Name: "bedrock_action"}
 
-	// Test 1: Default text model
 	res, err := analyzer.AnalyzeText(ctx, "sample input text", parser, action, "")
 	if err != nil {
 		t.Fatalf("AnalyzeText failed: %v", err)
@@ -69,7 +68,6 @@ func TestBedrockAnalyzer_AnalyzeText(t *testing.T) {
 		t.Errorf("unexpected res: %s", res)
 	}
 
-	// Test 2: Dynamic model override
 	overrideModel := "us.meta.llama3-3-70b-instruct-v1:0"
 	_, err = analyzer.AnalyzeText(ctx, "sample text", parser, action, overrideModel)
 	if err != nil {
@@ -109,7 +107,6 @@ func TestBedrockAnalyzer_AnalyzeImage(t *testing.T) {
 	action := &pb.ActionDefinition{Name: "bedrock_vision"}
 	images := [][]byte{[]byte("fake-image-bytes")}
 
-	// Test vision analysis
 	res, err := analyzer.AnalyzeImage(ctx, images, parser, action, "")
 	if err != nil {
 		t.Fatalf("AnalyzeImage failed: %v", err)
@@ -122,7 +119,6 @@ func TestBedrockAnalyzer_AnalyzeImage(t *testing.T) {
 		t.Errorf("unexpected vision result: %s", res)
 	}
 
-	// Test vision with dynamic model override
 	overrideVisionModel := "amazon.titan-embed-text-v2:0"
 	_, err = analyzer.AnalyzeImage(ctx, images, parser, action, overrideVisionModel)
 	if err != nil {
@@ -134,7 +130,6 @@ func TestBedrockAnalyzer_AnalyzeImage(t *testing.T) {
 }
 
 func TestBedrockAnalyzer_ErrorHandling(t *testing.T) {
-	// Case 1: Client Converse returns error
 	mockClient := &mockBedrockClient{
 		err: errors.New("bedrock service unavailable"),
 	}
@@ -146,7 +141,6 @@ func TestBedrockAnalyzer_ErrorHandling(t *testing.T) {
 		t.Fatalf("expected error when bedrock client fails, got nil")
 	}
 
-	// Case 2: Response output is not ConverseOutputMemberMessage
 	mockClient.err = nil
 	mockClient.output = &bedrockruntime.ConverseOutput{
 		Output: nil,
@@ -156,7 +150,6 @@ func TestBedrockAnalyzer_ErrorHandling(t *testing.T) {
 		t.Fatalf("expected error when output is nil/unexpected, got nil")
 	}
 
-	// Case 3: Empty content in response
 	mockClient.output = &bedrockruntime.ConverseOutput{
 		Output: &types.ConverseOutputMemberMessage{
 			Value: types.Message{

@@ -18,7 +18,6 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// TestChallenger_NatsServer_ErrorContractFormat_Comprehensive verifies all error paths enrich ErrorContract with [Step: %s, URI: %s].
 func TestChallenger_NatsServer_ErrorContractFormat_Comprehensive(t *testing.T) {
 	os.Setenv("SERVICE_NAME", "ai_service")
 
@@ -179,7 +178,6 @@ func (m *mockAnalyzerWithErr) GenerateEmbedding(ctx context.Context, text string
 	return []float32{0.1}, nil
 }
 
-// TestChallenger_NatsServer_ConcurrentProcessingStress 100 concurrent workers processing messages.
 func TestChallenger_NatsServer_ConcurrentProcessingStress(t *testing.T) {
 	js := &mockJS{}
 	analyzer := &memoryAuditAnalyzer{}

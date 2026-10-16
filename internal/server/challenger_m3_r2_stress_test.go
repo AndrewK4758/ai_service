@@ -14,7 +14,6 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// TestChallenger2_AmbiguousMetadataAndPrecedence tests priority and handling of ambiguous metadata
 func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 	os.Setenv("OPENAI_VISION_MODEL", "vision-model-target")
 	os.Setenv("OPENAI_TEXT_MODEL", "text-model-target")
@@ -84,7 +83,6 @@ func TestChallenger2_AmbiguousMetadataAndPrecedence(t *testing.T) {
 	}
 }
 
-// TestChallenger2_RapidConcurrentPDFSwitching stress-tests 500 concurrent workers toggling scanned vs text PDF payloads
 func TestChallenger2_RapidConcurrentPDFSwitching(t *testing.T) {
 	os.Setenv("OPENAI_VISION_MODEL", "gpt-4o-vision-test")
 	os.Setenv("OPENAI_TEXT_MODEL", "gemma4-extended-test")

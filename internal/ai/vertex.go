@@ -99,7 +99,7 @@ func (v *VertexAnalyzer) AnalyzeImage(ctx context.Context, imageBytes [][]byte, 
 	var parts []genai.Part
 	parts = append(parts, genai.Text(prompt))
 	for _, b := range imageBytes {
-		parts = append(parts, genai.ImageData("image/jpeg", b)) // Assume JPEG for now
+		parts = append(parts, genai.ImageData("image/jpeg", b))
 	}
 
 	logger.Info("AI_Service", "[Ai Service] Sending Vertex AI Vision request to model %s", m)

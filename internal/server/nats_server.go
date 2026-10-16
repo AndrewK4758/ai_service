@@ -116,7 +116,6 @@ func (s *NatsServer) Start(ctx context.Context) error {
 	logger.Info("AI_Service", "Starting AI consumer '%s' with WorkerPoolSize=%d, MaxAckPending=%d...", durableName, s.workerPoolSize, maxAck)
 	sem := make(chan struct{}, s.workerPoolSize)
 
-	// Start primary consumer
 	var cc jetstream.ConsumeContext
 	cc, err = cons.Consume(func(msg jetstream.Msg) {
 		go s.handleMessage(ctx, msg, sem)
@@ -225,14 +224,12 @@ func (s *NatsServer) processMessage(ctx context.Context, msg jetstream.Msg) {
 		logger.Debug("Input payload", "%s: %+v", "payload", req.Payload.AsMap())
 	}
 
-	// Fail-Fast Assertion 1: Infrastructure Identity Validation
 	if err := identityparser.NewIdentityParser(req.GetIdentity()).Validate(true); err != nil {
 		panic(fmt.Sprintf("action failed: invalid identity - %v", err))
 	}
 
 	identity = req.GetIdentity()
 
-	// Fail-Fast Assertion 2: Required TaskSubject Validation
 	if req.GetTaskSubject() == "" {
 		panic("action failed: missing required TaskSubject")
 	}
@@ -317,7 +314,6 @@ func (s *NatsServer) handleUnmarshalError(ctx context.Context, msg jetstream.Msg
 }
 
 func (s *NatsServer) executeAction(ctx context.Context, req *pb.ExecuteTaskRequest, targetSubj string, modelID string) (string, string, error) {
-	// MPL-327: intercept compile_manifest and residual_sweep before generic document dispatch
 	lowerSubj := strings.ToLower(targetSubj)
 	if strings.Contains(lowerSubj, "compile_manifest") {
 		return s.handleMPL327MetaCompiler(ctx, req)
@@ -493,17 +489,13 @@ func getStepName(req *pb.ExecuteTaskRequest) string {
 	return "AI_PROCESSING"
 }
 
-// MPL-327: Convergence & Manifest helpers - domain-agnostic, zero hardcoded vendor strings
+// Compiles a DynamicLabelManifest from the layout extracted in the prior step.
 func (s *NatsServer) handleMPL327MetaCompiler(ctx context.Context, req *pb.ExecuteTaskRequest) (string, string, error) {
-	// Pass 2: compile DynamicLabelManifest from layout extracted in Node 1
-	// Reads GlobalState.functional layout summary, emits JSON with dynamic_labels, spatial_wipe_zones, confidence_threshold
-	// Uses analyzer.AnalyzeText with strict prompt; supports GlobalState.NonFunctional["ConfidenceThresholdOverride"]
 	parser := workflowparser.NewTaskRequestParser(req)
 	gs, err := parser.GetGlobalState()
 	if err != nil {
 		return "", "INVALID_PAYLOAD", fmt.Errorf("[Step: %s, URI: unknown] missing global_state: %w", getStepName(req), err)
 	}
-	// Extract override if present (tier 1) - non_functional may be absent
 	var overrideVal *float64
 	if nfRaw, ok := gs["non_functional"]; ok {
 		if nfMap, ok := nfRaw.(map[string]any); ok {
@@ -527,7 +519,6 @@ func (s *NatsServer) handleMPL327MetaCompiler(ctx context.Context, req *pb.Execu
 			}
 		}
 	}
-	// Determine document type for tier 2/3 resolution
 	docType := ""
 	if fRaw, ok := gs["functional"]; ok {
 		if fMap, ok := fRaw.(map[string]any); ok {
@@ -543,9 +534,7 @@ func (s *NatsServer) handleMPL327MetaCompiler(ctx context.Context, req *pb.Execu
 			}
 		}
 	}
-	// MPL-327 Generic 3-tier: Tier1 override (above), Tier2 LLM/layout-density, Tier3 baseline 0.45
-	// Do NOT string-match docType ("closing"/"disclosure") — generic blank-template uses structural signals only.
-	// Tier2: try LLM-derived threshold from functional.llm_confidence_threshold or layout has_grid/header_density
+	// Resolve confidence threshold: explicit override first, then layout density signals, falling back to 0.45.
 	threshold := 0.45
 	if overrideVal != nil {
 		threshold = *overrideVal
@@ -556,7 +545,6 @@ func (s *NatsServer) handleMPL327MetaCompiler(ctx context.Context, req *pb.Execu
 			threshold = 0.75
 		}
 	} else {
-		// Check for LLM-provided threshold or layout density hints in GlobalState.functional
 		if fRaw, ok := gs["functional"]; ok {
 			if fMap, ok := fRaw.(map[string]any); ok {
 				if v, ok := fMap["llm_confidence_threshold"]; ok {
@@ -572,7 +560,7 @@ func (s *NatsServer) handleMPL327MetaCompiler(ctx context.Context, req *pb.Execu
 						threshold = 0.38
 					}
 				}
-				_ = fMap // keep docType unused generically
+				_ = fMap
 			}
 		}
 		if threshold < 0.25 {
@@ -582,26 +570,19 @@ func (s *NatsServer) handleMPL327MetaCompiler(ctx context.Context, req *pb.Execu
 			threshold = 0.75
 		}
 	}
-	// Build deterministic manifest - zero hardcoded vendor strings, structure driven by layout
-	// Analyzer will refine via LLM meta-prompt; we provide baseline manifest
-	// Generic blank-template: LLM is authoritative. No hardcoded domain labels — fallback is EMPTY manifest, not synthetic.
-	// If LLM/analyzer fails, return empty labels + threshold only; spatial_wipe_zones stay empty and will be populated by LLM on success.
+	// Default to an empty manifest if the LLM does not return a valid override.
 	manifest := map[string]any{
 		"dynamic_labels":       []string{},
 		"spatial_wipe_zones":   []any{},
 		"confidence_threshold": threshold,
 		"document_summary":     fmt.Sprintf("generic blank-template manifest threshold=%.2f (structural, no document-type switch)", threshold),
 	}
-	// Allow LLM to override via AnalyzeText if model available
 	if s.analyzer != nil {
-		// Provide layout text as documentContent
-		// Generic layout hint — do NOT leak documentType string matching; pass only structural signal
 		layoutText := fmt.Sprintf("Structural layout density threshold %.2f; infer dynamic_labels from font weight / grid geometry only (no document-type switch)", threshold)
 		if docType != "" {
 			layoutText += fmt.Sprintf("\nOpaque doc hint (do NOT branch): %s", docType)
 		}
 		if res, err := s.analyzer.AnalyzeText(ctx, layoutText, req, nil, "mpl327-meta-compiler"); err == nil && res != "" {
-			// If analyzer returns valid JSON manifest, prefer it
 			var parsed any
 			if json.Unmarshal([]byte(res), &parsed) == nil {
 				return res, "", nil
@@ -639,7 +620,6 @@ func (s *NatsServer) handleMPL327ResidualSweep(req *pb.ExecuteTaskRequest) (stri
 			funcMap = m
 		}
 	}
-	// Current PassCount (default 1)
 	passCount := 1
 	if pc, ok := funcMap["PassCount"]; ok {
 		switch v := pc.(type) {
@@ -661,10 +641,8 @@ func (s *NatsServer) handleMPL327ResidualSweep(req *pb.ExecuteTaskRequest) (stri
 	if passCount < 1 {
 		return "", "IMPOSSIBLE_STATE", fmt.Errorf("[SEAM: IMPOSSIBLE_STATE] PassCount %d <1 for Job %s", passCount, req.Identity.JobId)
 	}
-	// Count residuals by scanning re-extracted text (from payload or functional)
 	var residualSamples []string
 	residualCount := 0
-	// Try to get re-extracted text from functional
 	textToScan := ""
 	for _, k := range []string{"extracted_text", "redacted_text", "residual_text", "DocumentText"} {
 		if v, ok := funcMap[k]; ok {
@@ -674,9 +652,8 @@ func (s *NatsServer) handleMPL327ResidualSweep(req *pb.ExecuteTaskRequest) (stri
 			}
 		}
 	}
-	// Also allow analyzer to provide count
 	if textToScan != "" {
-		// Count $ occurrences
+		// Count currency amount occurrences ($ followed by digits/punctuation) as residual values.
 		idx := 0
 		for {
 			pos := strings.Index(textToScan[idx:], "$")
@@ -699,7 +676,7 @@ func (s *NatsServer) handleMPL327ResidualSweep(req *pb.ExecuteTaskRequest) (stri
 			}
 		}
 	}
-	// Check for explicit residual count in functional (from cpp_ml_worker residual_report)
+	// Prefer an explicit residual count from the worker report when present.
 	if rc, ok := funcMap["ResidualValueCount"]; ok {
 		if v, ok := rc.(float64); ok {
 			residualCount = int(v)
@@ -717,7 +694,6 @@ func (s *NatsServer) handleMPL327ResidualSweep(req *pb.ExecuteTaskRequest) (stri
 	if !isConverged {
 		nextPass = passCount + 1
 		if nextPass > maxPasses || passCount >= maxPasses {
-			// [SEAM: LINEAGE_GAP]
 			shouldFailFast = true
 		}
 	}
@@ -737,7 +713,6 @@ func (s *NatsServer) handleMPL327ResidualSweep(req *pb.ExecuteTaskRequest) (stri
 		"residual_value_count": residualCount,
 	}
 	b, _ := json.Marshal(result)
-	// Return JSON that WorkflowExecutionService will merge into GlobalState.Functional
 	return string(b), "", nil
 }
 
@@ -1266,18 +1241,16 @@ func (s *NatsServer) routeToDLQ(ctx context.Context, msg jetstream.Msg, identity
 	_ = dlqPub.Publish(ctx, identity, errContract, msg.Subject(), nil)
 }
 
-// ResolveModelRoute resolves model selection in strict 4-tier Client Authority order:
-// Tier 1: Client runtime override (node_config.model_override / dynamic_input.model_override / model_choice)
-// Tier 2: Modality route if is_scanned flag is present (MODEL_ROUTE_VISION / OPENAI_VISION_MODEL vs MODEL_ROUTE_TEXT / OPENAI_TEXT_MODEL)
-// Tier 3: Action route env var (MODEL_ROUTE_<ACTION>)
-// Tier 4: Global default (OPENAI_TEXT_MODEL)
+// ResolveModelRoute selects the model ID and returns its resolution tier:
+// 1: runtime override in node_config or dynamic_input
+// 2: action-specific route (MODEL_ROUTE_<ACTION>)
+// 3: modality route based on the is_scanned flag
+// 4: global default (OPENAI_TEXT_MODEL)
 func (s *NatsServer) ResolveModelRoute(req *pb.ExecuteTaskRequest, taskSubject string) (string, int) {
-	// Tier 1: Client Override (Highest Authority)
 	if overrideModel, ok := extractModelOverride(req); ok && strings.TrimSpace(overrideModel) != "" {
 		return strings.TrimSpace(overrideModel), 1
 	}
 
-	// Modality Route (explicit is_scanned flag in payload)
 	if req != nil && req.Payload != nil {
 		if fields := req.Payload.GetFields(); fields != nil {
 			if _, ok := fields["global_state"]; ok {
@@ -1297,7 +1270,6 @@ func (s *NatsServer) ResolveModelRoute(req *pb.ExecuteTaskRequest, taskSubject s
 		}
 	}
 
-	// Tier 2 / 3: Action Subject Mapping (MODEL_ROUTE_<ACTION>)
 	taskSubject = strings.TrimSpace(taskSubject)
 	if taskSubject != "" {
 		parts := strings.Split(taskSubject, ".")
@@ -1328,12 +1300,10 @@ func (s *NatsServer) ResolveModelRoute(req *pb.ExecuteTaskRequest, taskSubject s
 		}
 	}
 
-	// Tier 4: Provider Default Text Model
 	if defaultModel := envutil.GetStringOrDefault("OPENAI_TEXT_MODEL", ""); defaultModel != "" {
 		return defaultModel, 4
 	}
 
-	// If subject was provided and resolveModelID works, try it
 	if taskSubject != "" {
 		if model, err := s.resolveModelID(taskSubject); err == nil && model != "" {
 			return model, 2
